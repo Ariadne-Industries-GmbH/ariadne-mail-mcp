@@ -12,7 +12,7 @@ from mcp_email_server.config import (
     get_settings,
 )
 from mcp_email_server.emails.dispatcher import dispatch_handler
-from mcp_email_server.emails.models import EmailPageResponse
+from mcp_email_server.emails.models import EmailContentBatchResponse, EmailMetadataPageResponse
 
 mcp = FastMCP("email")
 
@@ -52,8 +52,6 @@ async def page_email(
         Field(default=None, description="Retrieve emails since this datetime (UTC)."),
     ] = None,
     subject: Annotated[str | None, Field(default=None, description="Filter emails by subject.")] = None,
-    body: Annotated[str | None, Field(default=None, description="Filter emails by body.")] = None,
-    text: Annotated[str | None, Field(default=None, description="Filter emails by text.")] = None,
     from_address: Annotated[str | None, Field(default=None, description="Filter emails by sender address.")] = None,
     to_address: Annotated[
         str | None,
@@ -63,7 +61,7 @@ async def page_email(
         Literal["asc", "desc"],
         Field(default=None, description="Order emails by field. `asc` or `desc`."),
     ] = "desc",
-) -> EmailPageResponse:
+) -> EmailMetadataPageResponse:
     handler = dispatch_handler(account_name)
 
     response = await handler.get_emails(
@@ -72,8 +70,6 @@ async def page_email(
         before=before,
         since=since,
         subject=subject,
-        body=body,
-        text=text,
         from_address=from_address,
         to_address=to_address,
         order=order,
@@ -82,6 +78,22 @@ async def page_email(
     # Convert emails to preview format
     response.emails = [email.to_preview() for email in response.emails]
     return response
+
+@mcp.tool(
+    description="Get the full content (including body) of one or more emails by their email_id. Use list_emails_metadata first to get the email_id."
+)
+async def get_emails_content(
+    account_name: Annotated[str, Field(description="The name of the email account.")],
+    email_ids: Annotated[
+        list[str],
+        Field(
+            description="List of email_id to retrieve (obtained from list_emails_metadata). Can be a single email_id or multiple email_ids."
+        ),
+    ],
+) -> EmailContentBatchResponse:
+    handler = dispatch_handler(account_name)
+    return await handler.get_emails_content(email_ids)
+
 
 @mcp.tool(
     description="Send an email using the specified account. Recipient should be a list of email addresses.",
@@ -99,6 +111,10 @@ async def send_email(
         list[str] | None,
         Field(default=None, description="A list of BCC email addresses."),
     ] = None,
+    html: Annotated[
+        bool,
+        Field(default=False, description="Whether to send the email as HTML (True) or plain text (False)."),
+    ] = False,
 ) -> str:
     enabled = os.getenv("MCP_EMAIL_SERVER_ENABLE_SENDING", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
