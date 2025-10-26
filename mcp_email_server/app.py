@@ -64,7 +64,7 @@ async def page_email(
 ) -> EmailMetadataPageResponse:
     handler = dispatch_handler(account_name)
 
-    response = await handler.get_emails(
+    response = await handler.get_emails_metadata(
         page=page,
         page_size=page_size,
         before=before,
@@ -74,9 +74,7 @@ async def page_email(
         to_address=to_address,
         order=order,
     )
-
-    # Convert emails to preview format
-    response.emails = [email.to_preview() for email in response.emails]
+    
     return response
 
 @mcp.tool(

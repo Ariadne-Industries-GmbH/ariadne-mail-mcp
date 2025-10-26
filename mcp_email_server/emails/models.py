@@ -21,17 +21,6 @@ class EmailMetadata(BaseModel):
             attachments=email["attachments"],
         )
 
-    def to_preview(self):
-        max_length = 200
-        truncated_body = self.body[:max_length] + "..." if len(self.body) > max_length else self.body
-        return EmailMetadata(
-            subject=self.subject,
-            sender=self.sender,
-            body=truncated_body,
-            date=self.date,
-            attachments=self.attachments,
-        )
-
 class EmailMetadataPageResponse(BaseModel):
     """Paged email metadata response"""
 
