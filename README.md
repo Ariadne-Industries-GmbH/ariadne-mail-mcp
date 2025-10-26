@@ -77,6 +77,7 @@ You can also configure the email server using environment variables, which is pa
 | `MCP_EMAIL_SERVER_SMTP_PORT`      | SMTP server port   | `465`         | No       |
 | `MCP_EMAIL_SERVER_SMTP_SSL`       | Enable SMTP SSL    | `true`        | No       |
 | `MCP_EMAIL_SERVER_SMTP_START_SSL` | Enable STARTTLS    | `false`       | No       |
+| `MCP_EMAIL_SERVER_ENABLE_SENDING` | Allow `send_email` | `false`       | No       |
 
 For separate IMAP/SMTP credentials, you can also use:
 
@@ -115,6 +116,58 @@ To install Email Server for Claude Desktop automatically via [Smithery](https://
 
 ```bash
 npx -y @smithery/cli install @ai-zerolab/mcp-email-server --client claude
+```
+
+## MCP Tools
+
+The server exposes MCP resources/tools for email workflows.
+
+- Resource `email://{account_name}`
+  - Returns masked account configuration for the given account.
+
+- Tool `list_available_accounts()` → list of accounts
+  - Returns masked attributes for configured email/provider accounts.
+
+- Tool `add_email_account(email: EmailSettings)` → string
+  - Adds an account and persists to TOML. Returns a success message.
+
+- Tool `page_email(account_name, page=1, page_size=10, before?, since?, subject?, body?, text?, from_address?, to_address?, order=\"desc\")` → EmailPageResponse
+  - Paginates INBOX with filters. Response: `{ page, page_size, before, since, subject, body, text, total, emails[] }` where `emails[]` are previews (truncated bodies).
+
+- Tool `send_email(account_name, recipients, subject, body, cc?, bcc?)` → string
+  - Sends an email (UTF‑8 safe subject/sender). Returns: `"Email sent successfully to <first-recipient>"`.
+  - Controlled by env: disabled by default. Set `MCP_EMAIL_SERVER_ENABLE_SENDING=true` (or `1/yes/on`) to enable. When disabled, the tool raises a permission error.
+
+- Tool `list_folders(account_name)` → list[str]
+  - Lists IMAP folders.
+
+- Tool `move_email(account_name, message_id, source_folder, destination_folder)` → bool
+  - Copies to destination, flags deleted in source, expunges.
+
+- Tool `delete_email(account_name, message_id, folder=\"INBOX\")` → bool
+  - Flags deleted and expunges.
+
+- Tool `get_full_email_body(account_name, message_id, folder=\"INBOX\")` → str
+  - Fetches RFC822 and returns the parsed full body string.
+
+- Tool `mark_email(account_name, message_id, folder=\"INBOX\", mark)` → bool
+  - Marks message using IMAP flags. `mark` in `{ "read", "unread", "flagged", "unflagged", "answered", "draft" }`.
+
+### Provider Accounts (Not Supported Yet)
+
+The config schema includes `ProviderSettings` for future API-based providers (e.g., Gmail/Outlook). These are currently not supported by this server — attempting to use a provider account results in a clear error. For provider-backed workflows, use another MCP server that implements provider handlers.
+
+Example invocation (arguments shape) for `page_email`:
+
+```json
+{
+  "account_name": "work",
+  "page": 1,
+  "page_size": 10,
+  "since": "2024-01-01T00:00:00Z",
+  "subject": "invoice",
+  "order": "desc"
+}
 ```
 
 ## Development

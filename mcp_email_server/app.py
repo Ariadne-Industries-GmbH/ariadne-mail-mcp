@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -99,9 +100,15 @@ async def send_email(
         Field(default=None, description="A list of BCC email addresses."),
     ] = None,
 ) -> str:
+    enabled = os.getenv("MCP_EMAIL_SERVER_ENABLE_SENDING", "false").lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        raise PermissionError(
+            "Email sending is disabled by configuration. Set MCP_EMAIL_SERVER_ENABLE_SENDING=1 to enable."
+        )
     handler = dispatch_handler(account_name)
     await handler.send_email(recipients, subject, body, cc, bcc)
-    return
+    # Return a simple success message for client UX/tests
+    return f"Email sent successfully to {recipients[0]}"
 
 @mcp.tool(description="List all folders in the specified email account.")
 async def list_folders(account_name: Annotated[str, Field(description="The name of the email account.")]) -> list[str]:
@@ -135,3 +142,18 @@ async def get_full_email_body(
 ) -> str:
     handler = dispatch_handler(account_name)
     return await handler.get_full_email_body(message_id, folder)
+
+@mcp.tool(
+    description="Mark an email (read/unread/flagged/unflagged/answered/draft) in the specified folder.",
+)
+async def mark_email(
+    account_name: Annotated[str, Field(description="The name of the email account.")],
+    message_id: Annotated[str, Field(description="The ID of the email to mark.")],
+    folder: Annotated[str, Field(default="INBOX", description="The folder containing the email.")] = "INBOX",
+    mark: Annotated[
+        Literal["read", "unread", "flagged", "unflagged", "answered", "draft"],
+        Field(description="Mark to apply: read/unread/flagged/unflagged/answered/draft."),
+    ] = "read",
+) -> bool:
+    handler = dispatch_handler(account_name)
+    return await handler.mark_email(message_id, folder, mark)

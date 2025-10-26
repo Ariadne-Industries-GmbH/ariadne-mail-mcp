@@ -393,6 +393,26 @@ class EmailClient:
             except Exception as e:
                 logger.info(f"Error during logout: {e}")
 
+    async def set_flag(self, message_id: str, folder: str, flag: str, add: bool) -> bool:
+        """Add or remove an IMAP flag on a message."""
+        imap = self.imap_class(self.email_server.host, self.email_server.port)
+        try:
+            await imap._client_task
+            await imap.wait_hello_from_server()
+            await imap.login(self.email_server.user_name, self.email_server.password)
+            await imap.select(folder)
+            try:
+                await imap.store(message_id, "+FLAGS" if add else "-FLAGS", flag)
+                return True
+            except Exception as e:
+                logger.error(f"Error setting flag {flag} (add={add}) on {message_id}: {e!s}")
+                return False
+        finally:
+            try:
+                await imap.logout()
+            except Exception as e:
+                logger.info(f"Error during logout: {e}")
+
 class ClassicEmailHandler(EmailHandler):
     def __init__(self, email_settings: EmailSettings):
         self.email_settings = email_settings
@@ -498,3 +518,23 @@ class ClassicEmailHandler(EmailHandler):
                 await imap.logout()
             except Exception as e:
                 logger.info(f"Error during logout: {e}")
+
+    async def mark_email(self, message_id: str, folder: str = "INBOX", mark: str = "read") -> bool:
+        """Mark an email with common IMAP flags.
+
+        mark options:
+        - read/unread -> \Seen add/remove
+        - flagged/unflagged -> \Flagged add/remove
+        - answered -> \Answered add
+        - draft -> \Draft add
+        """
+        mapping = {
+            "read": ("\\\\Seen", True),
+            "unread": ("\\\\Seen", False),
+            "flagged": ("\\\\Flagged", True),
+            "unflagged": ("\\\\Flagged", False),
+            "answered": ("\\\\Answered", True),
+            "draft": ("\\\\Draft", True),
+        }
+        flag, add = mapping.get(mark, ("\\\\Seen", True))
+        return await self.incoming_client.set_flag(message_id, folder, flag, add)

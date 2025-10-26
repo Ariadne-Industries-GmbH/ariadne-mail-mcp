@@ -13,7 +13,11 @@ def dispatch_handler(account_name: str) -> EmailHandler:
     settings = get_settings()
     account = settings.get_account(account_name)
     if isinstance(account, ProviderSettings):
-        raise NotImplementedError
+        raise NotImplementedError(
+            "Provider accounts are not supported by this server yet. "
+            "Please use an MCP server that implements provider handlers, "
+            "or configure a classic IMAP/SMTP account instead."
+        )
     if isinstance(account, EmailSettings):
         return ClassicEmailHandler(account)
 

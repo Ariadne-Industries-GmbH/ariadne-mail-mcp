@@ -25,7 +25,7 @@ class EmailData(BaseModel):
         truncated_body = self.body[:max_length] + "..." if len(self.body) > max_length else self.body
         return EmailData(
             subject=self.subject,
-            sender=self.subject,
+            sender=self.sender,
             body=truncated_body,
             date=self.date,
             attachments=self.attachments,
