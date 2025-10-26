@@ -35,8 +35,10 @@ async def add_email_account(email: EmailSettings) -> str:
     settings.store()
     return f"Successfully added email account '{email.account_name}'"
 
-@mcp.tool(description="Paginate emails, page start at 1, before and since as UTC datetime.")
-async def page_email(
+@mcp.tool(
+    description="List email metadata (email_id, subject, sender, recipients, date) without body content. Returns email_id for use with get_emails_content."
+)
+async def list_emails_metadata(
     account_name: Annotated[str, Field(description="The name of the email account.")],
     page: Annotated[
         int,
@@ -64,7 +66,7 @@ async def page_email(
 ) -> EmailMetadataPageResponse:
     handler = dispatch_handler(account_name)
 
-    response = await handler.get_emails_metadata(
+    return await handler.get_emails_metadata(
         page=page,
         page_size=page_size,
         before=before,
@@ -74,8 +76,6 @@ async def page_email(
         to_address=to_address,
         order=order,
     )
-    
-    return response
 
 @mcp.tool(
     description="Get the full content (including body) of one or more emails by their email_id. Use list_emails_metadata first to get the email_id."
