@@ -141,3 +141,5 @@ cython_debug/
 
 tests/config.toml
 local/
+main.dist/
+main.bin
