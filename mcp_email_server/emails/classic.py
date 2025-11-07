@@ -1,4 +1,5 @@
 import email.utils
+import re
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from email.header import Header
@@ -19,6 +20,54 @@ from mcp_email_server.emails.models import (
     EmailMetadataPageResponse,
 )
 from mcp_email_server.log import logger
+
+def imap_decode(s: str) -> str:
+    out = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == '&':
+            j = s.find('-', i)
+            if j == -1:
+                # Ungültig -> rohes '&'
+                out.append('&')
+                i += 1
+                continue
+            if j == i + 1:
+                # "&-" steht für ein einzelnes '&'
+                out.append('&')
+                i = j + 1
+                continue
+            b64 = s[i+1:j]
+            # IMAP nutzt eine modifizierte Base64-Variante: ',' statt '/'
+            b64 = b64.replace(',', '/')
+            # Pad Base64
+            pad = '=' * ((4 - (len(b64) % 4)) % 4)
+            try:
+                import base64
+                raw = base64.b64decode(b64 + pad)
+                # Big-endian UTF-16
+                out.append(raw.decode('utf-16-be'))
+            except Exception:
+                # Fallback: roher Text
+                out.append(s[i:j+1])
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+_LIST_RE = re.compile(
+    r'^\* +LIST +\((?P<flags>[^)]*)\)\s+(?P<delim>NIL|".*?"|[^ ]+)\s+(?P<name>.*)$',
+    re.IGNORECASE,
+)
+
+def _unquote(s: str) -> str:
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] == '"':
+        s = s[1:-1]
+        s = s.replace(r'\"', '"')
+    return s
 
 class EmailClient:
     def __init__(self, email_server: EmailServer, sender: str | None = None):
@@ -437,22 +486,62 @@ class EmailClient:
 
             await smtp.send_message(msg, recipients=all_recipients)
 
-    async def list_folders(self) -> list[str]:
-        """List all folders in the mail account."""
+    async def list_folders(self, include_noselect: bool = True) -> list[str]:
+        """Listet alle Ordner-Namen robust (Literals, Quoted, Atom, IMAP-UTF7)."""
         imap = self.imap_class(self.email_server.host, self.email_server.port)
         try:
-            # Wait for the connection to be established
             await imap._client_task
             await imap.wait_hello_from_server()
-
-            # Login
             await imap.login(self.email_server.user_name, self.email_server.password)
 
-            # List all folders
-            _, folders = await imap.list()
-            return [folder.decode("utf-8") for folder in folders]
+            # OPTIONAL: Spezialnutzung (RFC 6154) anfragen – Server-abhängig:
+            # Manche Server verstehen: await imap.list("", "*", "RETURN", "(SPECIAL-USE)")
+            # Sonst fallback:
+            resp = await imap.list("", "*")
+
+            lines = getattr(resp, "lines", resp)
+            if not lines:
+                return []
+
+            folders: list[str] = []
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                txt = line.decode("utf-8", "replace") if isinstance(line, (bytes, bytearray)) else str(line)
+                m = _LIST_RE.match(txt.strip())
+                if not m:
+                    # Manche Server schicken zusätzliche Statuszeilen – überspringen
+                    i += 1
+                    continue
+
+                flags = {f.strip().upper() for f in m.group("flags").split()} if m.group("flags") else set()
+                # \HasChildren, \Noselect, etc. sind hier drin
+
+                name_field = m.group("name").strip()
+
+                # Literal? -> {N} und der eigentliche Name steht in der *nächsten* Zeile
+                lit = re.fullmatch(r'\{(\d+)\}\r?$', name_field)
+                if lit:
+                    n = int(lit.group(1))
+                    next_line = lines[i + 1] if i + 1 < len(lines) else b""
+                    if isinstance(next_line, str):
+                        next_line = next_line.encode("utf-8", "replace")
+                    raw = (next_line or b"")[:n].decode("utf-8", "replace")
+                    name = imap_decode(raw)
+                    i += 2
+                else:
+                    # quoted-string oder atom
+                    name = imap_decode(_unquote(name_field))
+                    i += 1
+
+                if not include_noselect and r'\NOSELECT' in flags:
+                    continue
+
+                folders.append(name)
+
+            return folders
+
         finally:
-            # Ensure we logout properly
             try:
                 await imap.logout()
             except Exception as e:
