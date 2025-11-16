@@ -263,6 +263,13 @@ exe = EXE(
 
 ```
 
+Run pyinstaller:
+```bash
+pyinstaller mcp_email_server_bin.spec
+```
+
+### Use the CLI (but this currently not works properly)
+
 ```bash
 pyinstaller --onefile --name mcp_email_server main.py --collect-data gradio --collect-data gradio_client --collect-data safehttpx --hidden-import anyio --hidden-import starlette.routing --collect-data numpy --hidden-import numpy
 ```
