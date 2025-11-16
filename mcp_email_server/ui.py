@@ -1,7 +1,22 @@
-import gradio as gr
+from datetime import datetime
+import json
+import logging
+from urllib.parse import urlparse
 
-from mcp_email_server.config import EmailSettings, get_settings, store_settings, DEFAULT_CONFIG_PATH
-from mcp_email_server.tools.installer import install_claude_desktop, is_installed, need_update, uninstall_claude_desktop
+import gradio as gr
+import httpx
+
+from mcp_email_server.config import DEFAULT_CONFIG_PATH, EmailSettings, get_settings, store_settings
+
+logger = logging.getLogger(__name__)
+
+
+def _is_valid_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    except Exception:
+        return False
 
 
 def create_ui():  # noqa: C901
@@ -385,93 +400,174 @@ def create_ui():  # noqa: C901
                     smtp_password,
                 ],
             )
+        # Ariadne Engine Registration
+        with gr.Accordion("Ariadne Engine Registration", open=True):
+            gr.Markdown(
+                "### Ariadne Engine Registration\n"
+                "- Register this MCP (stdio) with your Ariadne Engine.\n"
+                "- The MCP will be launched via stdio, no URL is required."
+            )
 
-        # Claude Desktop Integration
-        with gr.Accordion("Claude Desktop Integration", open=True):
-            gr.Markdown("### Claude Desktop Integration")
+            def _post_thread(endpoint_url: str, api_key_val: str, thread_name: str, payload: dict) -> httpx.Response:
+                headers = {
+                    "Authorization": f"Bearer {api_key_val}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                }
+                body = {"thread_name": thread_name, "payload": payload}
+                with httpx.Client(timeout=15.0) as client:
+                    return client.post(endpoint_url, headers=headers, json=body)
 
-            # Status display for Claude Desktop integration
-            claude_status = gr.Markdown("")
+            def _get_spec_by_name(endpoint_url: str, api_key_val: str, name: str) -> dict:
+                try:
+                    response = _post_thread(
+                        endpoint_url,
+                        api_key_val,
+                        "get-mcp-server-spec-by-name",
+                        {
+                            "path_params": {"name": name},
+                            "query_params": None,
+                            "body_params_serialized": None,
+                        },
+                    )
+                except Exception as exc:  # pragma: no cover - network errors
+                    logger.error("Network error while checking spec name: %s", exc)
+                    return {"error": f"Network error while checking name: {exc}"}
 
-            # Function to check and update Claude Desktop status
-            def update_claude_status():
-                if is_installed():
-                    if need_update():
-                        return "Claude Desktop integration is installed but needs to be updated."
-                    else:
-                        return "Claude Desktop integration is installed and up to date."
-                else:
-                    return "Claude Desktop integration is not installed."
+                if response.status_code == 404:
+                    return {"data": None}
+                if not (200 <= response.status_code < 300):
+                    return {"error": f"Lookup failed ({response.status_code}): {response.text[:200]}"}
+                try:
+                    return {"data": response.json()}
+                except Exception:
+                    return {"error": f"Invalid JSON from lookup ({response.status_code})"}
 
-            # Buttons for Claude Desktop actions
+            def configure_engine(
+                api_key: str,
+                endpoint_url: str,
+                spec_name: str,
+                command_path: str,
+                tags_raw: str,
+                description: str | None = None,
+            ) -> str:
+                api_key_s = (api_key or "").strip()
+                endpoint_s = (endpoint_url or "").strip()
+                name_s = (spec_name or "").strip()
+                command_s = (command_path or "").strip()
+                tags_s = (tags_raw or "").strip()
+                description_s = (description or "").strip() if description is not None else ""
+
+                if not api_key_s:
+                    return "API key is required."
+                if not endpoint_s or not _is_valid_url(endpoint_s):
+                    return "Engine endpoint URL must be a valid URL (http/https)."
+                if not name_s:
+                    return "Name is required."
+                if not command_s:
+                    return "Command path is required."
+
+                tags = [tag.strip() for tag in tags_s.split(",") if tag.strip()] if tags_s else []
+
+                dto = {
+                    "key": "",
+                    "name": name_s,
+                    "description": description_s,
+                    "transport": "stdio",
+                    "command": [command_s, "stdio"],
+                    "url": None,
+                    "bearer_token": None,
+                    "env": None,
+                    "tags": tags or None,
+                    "is_standard": False,
+                    "created_at": datetime.now().isoformat(),
+                }
+
+                lookup = _get_spec_by_name(endpoint_s, api_key_s, name_s)
+                if "error" in lookup:
+                    return f"Name check failed: {lookup['error']}"
+
+                existing = lookup.get("data")
+
+                try:
+                    if existing is None:
+                        response = _post_thread(
+                            endpoint_s,
+                            api_key_s,
+                            "create-mcp-server-spec",
+                            {
+                                "path_params": None,
+                                "query_params": None,
+                                "body_params_serialized": json.dumps(dto),
+                            },
+                        )
+                        if response.status_code != 201:
+                            return f"Create failed ({response.status_code}): {response.text[:300]}"
+                        try:
+                            data = response.json().get("data")
+                        except Exception:
+                            data = None
+                        key = (data or {}).get("key") if isinstance(data, dict) else None
+                        return f"Created MCP Server Spec '{name_s}' (key={key or '?'})."
+                    key = existing.get("key") if isinstance(existing, dict) else None
+                    if not key:
+                        return "Update failed: existing spec has no key."
+                    response = _post_thread(
+                        endpoint_s,
+                        api_key_s,
+                        "update-mcp-server-spec",
+                        {
+                            "path_params": {"key": key},
+                            "query_params": None,
+                            "body_params_serialized": json.dumps(dto),
+                        },
+                    )
+                    if response.status_code != 200:
+                        return f"Update failed ({response.status_code}): {response.text[:300]}"
+                    return f"Updated MCP Server Spec '{name_s}' (key={key})."
+                except Exception as exc:  # pragma: no cover - network errors
+                    logger.error("Error contacting engine: %s", exc)
+                    return f"Error contacting engine: {exc}"
+
             with gr.Row():
-                install_update_btn = gr.Button("Install to Claude Desktop")
-                uninstall_btn = gr.Button("Uninstall from Claude Desktop")
+                api_key_input = gr.Textbox(label="Engine API Key (Bearer)", type="password")
+                endpoint_input = gr.Textbox(
+                    label="Engine Endpoint URL",
+                    placeholder="https://aaa.ariadneanyerse.de",
+                )
 
-            # Functions for Claude Desktop actions
-            def install_or_update_claude():
-                try:
-                    install_claude_desktop()
-                    status = update_claude_status()
-                    # Update button states based on new status
-                    is_inst = is_installed()
-                    needs_upd = need_update()
+            with gr.Row():
+                spec_name_input = gr.Textbox(
+                    label="Spec Name (unique)",
+                    placeholder="mcp-email-server",
+                    value="mcp-email-server",
+                )
+                command_path_input = gr.Textbox(
+                    label="MCP Command Path",
+                    placeholder="./mcps/mcp_email_server_bin",
+                    value="./mcps/mcp_email_server_bin",
+                )
 
-                    button_text = "Update Claude Desktop" if (is_inst and needs_upd) else "Install to Claude Desktop"
-                    button_interactive = not (is_inst and not needs_upd)
-
-                    return [
-                        status,
-                        gr.update(value=button_text, interactive=button_interactive),
-                        gr.update(interactive=is_inst),
-                    ]
-                except Exception as e:
-                    return [f"Error installing/updating Claude Desktop: {e!s}", gr.update(), gr.update()]
-
-            def uninstall_from_claude():
-                try:
-                    uninstall_claude_desktop()
-                    status = update_claude_status()
-                    # Update button states based on new status
-                    is_inst = is_installed()
-                    needs_upd = need_update()
-
-                    button_text = "Update Claude Desktop" if (is_inst and needs_upd) else "Install to Claude Desktop"
-                    button_interactive = not (is_inst and not needs_upd)
-
-                    return [
-                        status,
-                        gr.update(value=button_text, interactive=button_interactive),
-                        gr.update(interactive=is_inst),
-                    ]
-                except Exception as e:
-                    return [f"Error uninstalling from Claude Desktop: {e!s}", gr.update(), gr.update()]
-
-            # Function to update button states based on installation status
-            def update_button_states():
-                status = update_claude_status()
-                is_inst = is_installed()
-                needs_upd = need_update()
-
-                button_text = "Update Claude Desktop" if (is_inst and needs_upd) else "Install to Claude Desktop"
-                button_interactive = not (is_inst and not needs_upd)
-
-                return [
-                    status,
-                    gr.update(value=button_text, interactive=button_interactive),
-                    gr.update(interactive=is_inst),
-                ]
-
-            # Connect buttons to functions
-            install_update_btn.click(
-                fn=install_or_update_claude, inputs=[], outputs=[claude_status, install_update_btn, uninstall_btn]
+            tags_input = gr.Textbox(
+                label="Tags (comma-separated, optional)",
+                placeholder="email, stdio, prod",
             )
-            uninstall_btn.click(
-                fn=uninstall_from_claude, inputs=[], outputs=[claude_status, install_update_btn, uninstall_btn]
-            )
+            description_input = gr.Textbox(label="Description (optional)", lines=3)
+            engine_status = gr.Textbox(label="Engine Status", interactive=False)
+            configure_button = gr.Button("Register / Update in Ariadne Engine")
 
-            # Initialize Claude Desktop status and button states
-            app.load(fn=update_button_states, inputs=None, outputs=[claude_status, install_update_btn, uninstall_btn])
+            configure_button.click(
+                fn=configure_engine,
+                inputs=[
+                    api_key_input,
+                    endpoint_input,
+                    spec_name_input,
+                    command_path_input,
+                    tags_input,
+                    description_input,
+                ],
+                outputs=engine_status,
+            )
 
     return app
 
