@@ -497,17 +497,20 @@ class EmailClient:
             # OPTIONAL: Spezialnutzung (RFC 6154) anfragen – Server-abhängig:
             # Manche Server verstehen: await imap.list("", "*", "RETURN", "(SPECIAL-USE)")
             # Sonst fallback:
-            resp = await imap.list("", "*")
-
-            lines = getattr(resp, "lines", resp)
-            if not lines:
+            status, data = await imap.list('""', '"*"')
+            print(f"STATUS {status}")
+            print(f"DATA {data}")
+            if status != "OK" or not data:
                 return []
+            lines = data
+
 
             folders: list[str] = []
             i = 0
             while i < len(lines):
                 line = lines[i]
                 txt = line.decode("utf-8", "replace") if isinstance(line, (bytes, bytearray)) else str(line)
+                print(txt)
                 m = _LIST_RE.match(txt.strip())
                 if not m:
                     # Manche Server schicken zusätzliche Statuszeilen – überspringen
