@@ -100,9 +100,9 @@ async def get_emails_content(
     return await handler.get_emails_content(email_ids, mailbox)
 
 
-@mcp.tool(
-    description="Send an email using the specified account. Supports replying to emails with proper threading when in_reply_to is provided.",
-)
+# @mcp.tool(
+#     description="Send an email using the specified account. Supports replying to emails with proper threading when in_reply_to is provided.",
+# )
 async def send_email(
     account_name: Annotated[str, Field(description="The name of the email account to send from.")],
     recipients: Annotated[list[str], Field(description="A list of recipient email addresses.")],
@@ -164,9 +164,9 @@ async def send_email(
     return f"Email sent successfully to {recipient_str}{attachment_info}"
 
 
-@mcp.tool(
-    description="Delete one or more emails by their email_id. Use list_emails_metadata first to get the email_id."
-)
+# @mcp.tool(
+#     description="Delete one or more emails by their email_id. Use list_emails_metadata first to get the email_id."
+# )
 async def delete_emails(
     account_name: Annotated[str, Field(description="The name of the email account.")],
     email_ids: Annotated[
