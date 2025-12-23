@@ -498,30 +498,26 @@ class EmailClient:
             # Manche Server verstehen: await imap.list("", "*", "RETURN", "(SPECIAL-USE)")
             # Sonst fallback:
             status, data = await imap.list('""', '"*"')
-            print(f"STATUS {status}")
-            print(f"DATA {data}")
             if status != "OK" or not data:
                 return []
             lines = data
-
 
             folders: list[str] = []
             i = 0
             while i < len(lines):
                 line = lines[i]
                 txt = line.decode("utf-8", "replace") if isinstance(line, (bytes, bytearray)) else str(line)
-                print(txt)
-                m = _LIST_RE.match(txt.strip())
-                if not m:
+                
+                # Pragmatische Lösung: nimm einfach das letzte Feld (Mailbox-Name)
+                # Format ist typischerweise: (<flags>) "<delim>" <name>
+                parts = txt.strip().split(" ", 2)
+                if len(parts) < 3:
                     # Manche Server schicken zusätzliche Statuszeilen – überspringen
                     i += 1
                     continue
-
-                flags = {f.strip().upper() for f in m.group("flags").split()} if m.group("flags") else set()
-                # \HasChildren, \Noselect, etc. sind hier drin
-
-                name_field = m.group("name").strip()
-
+                
+                name_field = parts[2].strip()
+                
                 # Literal? -> {N} und der eigentliche Name steht in der *nächsten* Zeile
                 lit = re.fullmatch(r'\{(\d+)\}\r?$', name_field)
                 if lit:
@@ -537,7 +533,8 @@ class EmailClient:
                     name = imap_decode(_unquote(name_field))
                     i += 1
 
-                if not include_noselect and r'\NOSELECT' in flags:
+                # Filter out NOSELECT folders if requested
+                if not include_noselect and r'\NOSELECT' in txt:
                     continue
 
                 folders.append(name)

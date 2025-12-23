@@ -137,14 +137,14 @@ async def get_email_count(
 
 async def move_email(
     client: EmailClient,
-    message_id: str,
+    email_id: str,
     source_folder: str,
     destination_folder: str,
 ) -> None:
     """Move an email from one folder to another."""
-    print(f"\nMoving email {message_id} from {source_folder} to {destination_folder}...")
+    print(f"\nMoving email {email_id} from {source_folder} to {destination_folder}...")
     
-    success = await client.move_email(message_id, source_folder, destination_folder)
+    success = await client.move_email(email_id, source_folder, destination_folder)
     
     if success:
         print("Email moved successfully!")
@@ -153,11 +153,11 @@ async def move_email(
         sys.exit(1)
 
 
-async def delete_email(client: EmailClient, message_id: str, folder: str = "INBOX") -> None:
+async def delete_email(client: EmailClient, email_id: str, folder: str = "INBOX") -> None:
     """Delete an email."""
-    print(f"\nDeleting email {message_id} from {folder}...")
+    print(f"\nDeleting email {email_id} from {folder}...")
     
-    success = await client.delete_email(message_id, folder)
+    success = await client.delete_email(email_id, folder)
     
     if success:
         print("Email deleted successfully!")
@@ -168,14 +168,14 @@ async def delete_email(client: EmailClient, message_id: str, folder: str = "INBO
 
 async def mark_email(
     client: EmailClient,
-    message_id: str,
+    email_id: str,
     folder: str = "INBOX",
     mark: str = "read",
 ) -> None:
     """Mark an email with a flag."""
-    print(f"\nMarking email {message_id} as {mark} in {folder}...")
+    print(f"\nMarking email {email_id} as {mark} in {folder}...")
     
-    success = await client.set_flag(message_id, folder, mark, True)
+    success = await client.set_flag(email_id, folder, mark, True)
     
     if success:
         print(f"Email marked as {mark} successfully!")
@@ -186,12 +186,12 @@ async def mark_email(
 
 async def export_emails(
     client: EmailClient,
-    output_file: str,
+    output: Optional[str] = None,
     page_size: int = 100,
     max_pages: int = 10,
 ) -> None:
     """Export emails to a JSON file."""
-    print(f"\nExporting emails to {output_file}...")
+    print(f"\nExporting emails to {output}...")
     
     all_emails = []
     
@@ -210,10 +210,10 @@ async def export_emails(
     
     print(f"\nExported {len(all_emails)} emails")
     
-    with open(output_file, "w", encoding="utf-8") as f:
+    with open(output, "w", encoding="utf-8") as f:
         json.dump(all_emails, f, indent=2, default=str)
     
-    print(f"\nExported to {output_file}")
+    print(f"\nExported to {output}")
 
 
 async def main():
@@ -251,14 +251,14 @@ Examples:
     list_parser.add_argument("--before", type=str, help="Filter by date before (YYYY-MM-DD)")
     list_parser.add_argument("--since", type=str, help="Filter by date since (YYYY-MM-DD)")
     list_parser.add_argument("--subject", type=str, help="Filter by subject")
-    list_parser.add_argument("--from", "--from-address", type=str, help="Filter by sender")
-    list_parser.add_argument("--to", "--to-address", type=str, help="Filter by recipient")
+    list_parser.add_argument("--from-address", type=str, dest="from_address", help="Filter by sender")
+    list_parser.add_argument("--to-address", type=str, dest="to_address", help="Filter by recipient")
     list_parser.add_argument("--order", type=str, default="desc", help="Order: asc or desc")
     list_parser.set_defaults(func=list_emails)
     
     # Get body command
     get_body_parser = subparsers.add_parser("get-body", help="Get email body")
-    get_body_parser.add_argument("--email-id", required=True, help="Email ID/UID")
+    get_body_parser.add_argument("email_id", help="Email ID/UID")
     get_body_parser.set_defaults(func=get_email_body)
     
     # Send command
@@ -292,20 +292,20 @@ Examples:
     
     # Move command
     move_parser = subparsers.add_parser("move", help="Move email")
-    move_parser.add_argument("--email-id", required=True, help="Email ID/UID")
-    move_parser.add_argument("--source", required=True, help="Source folder")
-    move_parser.add_argument("--destination", required=True, help="Destination folder")
+    move_parser.add_argument("email_id", help="Email ID/UID")
+    move_parser.add_argument("--source-folder", required=True, help="Source folder")
+    move_parser.add_argument("--destination-folder", required=True, help="Destination folder")
     move_parser.set_defaults(func=move_email)
     
     # Delete command
     delete_parser = subparsers.add_parser("delete", help="Delete email")
-    delete_parser.add_argument("--email-id", required=True, help="Email ID/UID")
+    delete_parser.add_argument("email_id", help="Email ID/UID")
     delete_parser.add_argument("--folder", default="INBOX", help="Folder containing email")
     delete_parser.set_defaults(func=delete_email)
     
     # Mark command
     mark_parser = subparsers.add_parser("mark", help="Mark email")
-    mark_parser.add_argument("--email-id", required=True, help="Email ID/UID")
+    mark_parser.add_argument("email_id", help="Email ID/UID")
     mark_parser.add_argument("--folder", default="INBOX", help="Folder containing email")
     mark_parser.add_argument(
         "--mark",
@@ -317,7 +317,7 @@ Examples:
     
     # Export command
     export_parser = subparsers.add_parser("export", help="Export emails to JSON")
-    export_parser.add_argument("--output", required=True, help="Output file path")
+    export_parser.add_argument("output", help="Output file path")
     export_parser.add_argument("--page-size", type=int, default=100, help="Emails per page")
     export_parser.add_argument("--max-pages", type=int, default=10, help="Maximum pages to export")
     export_parser.set_defaults(func=export_emails)
@@ -334,6 +334,12 @@ Examples:
     from mcp_email_server.config import get_settings
     
     config = get_settings()
+    
+    # Check if we have any email accounts configured
+    if not config.emails:
+        print("Error: No email accounts configured. Please configure your email settings.")
+        print("You can set environment variables or create a config file.")
+        sys.exit(1)
     
     # Use incoming server for most operations
     email_server = EmailServer(

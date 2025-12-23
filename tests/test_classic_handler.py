@@ -132,5 +132,4 @@ class TestClassicEmailHandler:
                 "Test Body",
                 ["cc@example.com"],
                 ["bcc@example.com"],
-                False,
             )
