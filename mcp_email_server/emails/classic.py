@@ -1006,15 +1006,16 @@ class ClassicEmailHandler(EmailHandler):
         - draft -> \Draft add
         """
         mapping = {
-            "read": ("\\\\Seen", True),
-            "unread": ("\\\\Seen", False),
-            "flagged": ("\\\\Flagged", True),
-            "unflagged": ("\\\\Flagged", False),
-            "answered": ("\\\\Answered", True),
-            "draft": ("\\\\Draft", True),
+            "read": ("\\Seen", True),
+            "unread": ("\\Seen", False),
+            "flagged": ("\\Flagged", True),
+            "unflagged": ("\\Flagged", False),
+            "answered": ("\\Answered", True),
+            "unanswered": ("\\Answered", False),
+            "draft": ("\\Draft", True),
         }
-        flag, add = mapping.get(mark, ("\\\\Seen", True))
-        return await self.incoming_client.set_flag(message_id, folder, flag, add)
+        flag, add = mapping.get(mark, ("\\Seen", True))
+        return await self.incoming_client.set_flag(message_id, folder, f"({flag})", add)
 
     async def delete_emails(self, email_ids: list[str], mailbox: str = "INBOX") -> tuple[list[str], list[str]]:
         """Delete emails by their IDs. Returns (deleted_ids, failed_ids)."""

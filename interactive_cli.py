@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 
 from mcp_email_server.config import EmailServer, EmailSettings
-from mcp_email_server.emails.classic import EmailClient
+from mcp_email_server.emails.classic import ClassicEmailHandler
 
 
 class InteractiveEmailCLI:
@@ -46,7 +46,26 @@ class InteractiveEmailCLI:
             start_ssl=self.config.emails[0].incoming.start_ssl,
         )
         
-        self.client = EmailClient(email_server)
+        # Use outgoing server for sending
+        outgoing_server = EmailServer(
+            host=self.config.emails[0].outgoing.host,
+            port=self.config.emails[0].outgoing.port,
+            user_name=self.config.emails[0].outgoing.user_name,
+            password=self.config.emails[0].outgoing.password,
+            use_ssl=self.config.emails[0].outgoing.use_ssl,
+            start_ssl=self.config.emails[0].outgoing.start_ssl,
+        )
+        
+        email_settings = EmailSettings(
+            email_address=self.config.emails[0].email_address,
+            full_name=self.config.emails[0].full_name,
+            incoming=email_server,
+            outgoing=outgoing_server,
+            save_to_sent=self.config.emails[0].save_to_sent,
+            sent_folder_name=self.config.emails[0].sent_folder_name,
+        )
+        
+        self.client = ClassicEmailHandler(email_settings)
         self.initialized = True
         print("✓ Email client initialized successfully")
         return True
@@ -69,8 +88,7 @@ class InteractiveEmailCLI:
             
         print(f"\nListing emails (page {page}, {page_size} per page)...")
         
-        emails = []
-        async for email_data in self.client.get_emails_metadata_stream(
+        response = await self.client.get_emails_metadata(
             page=page,
             page_size=page_size,
             before=before,
@@ -79,22 +97,21 @@ class InteractiveEmailCLI:
             from_address=from_address,
             to_address=to_address,
             order=order,
-        ):
-            emails.append(email_data)
-        
-        total = await self.client.get_email_count(before, since, subject, from_address, to_address)
+        )
+        emails = response.emails
+        total = response.total
         
         print(f"\nFound {len(emails)} emails (total: {total})")
         print("-" * 80)
         
         for i, email in enumerate(emails, start=1):
             print(f"\nEmail {i} of {len(emails)}:")
-            print(f"  ID: {email['email_id']}")
-            print(f"  Subject: {email['subject']}")
-            print(f"  From: {email['from']}")
-            print(f"  To: {', '.join(email['to'])}")
-            print(f"  Date: {email['date']}")
-            print(f"  Attachments: {len(email['attachments'])}")
+            print(f"  ID: {email.email_id}")
+            print(f"  Subject: {email.subject}")
+            print(f"  From: {email.sender}")
+            print(f"  To: {', '.join(email.recipients)}")
+            print(f"  Date: {email.date}")
+            print(f"  Attachments: {len(email.attachments)}")
     
     async def get_email_body(self, email_id: str) -> None:
         """Get the full body of a specific email."""
@@ -104,20 +121,21 @@ class InteractiveEmailCLI:
             
         print(f"\nFetching email body for ID: {email_id}...")
         
-        email_data = await self.client.get_email_body_by_id(email_id)
+        response = await self.client.get_emails_content([email_id])
         
-        if email_data:
-            print(f"\nSubject: {email_data['subject']}")
-            print(f"From: {email_data['from']}")
-            print(f"To: {', '.join(email_data['to'])}")
-            print(f"Date: {email_data['date']}")
-            print(f"\nBody ({len(email_data['body'])} characters):")
+        if response.emails:
+            email = response.emails[0]
+            print(f"\nSubject: {email.subject}")
+            print(f"From: {email.sender}")
+            print(f"To: {', '.join(email.recipients)}")
+            print(f"Date: {email.date}")
+            print(f"\nBody ({len(email.body)} characters):")
             print("-" * 80)
-            print(email_data['body'])
+            print(email.body)
             print("-" * 80)
             
-            if email_data['attachments']:
-                print(f"\nAttachments: {', '.join(email_data['attachments'])}")
+            if email.attachments:
+                print(f"\nAttachments: {', '.join(email.attachments)}")
         else:
             print(f"Error: Could not retrieve email with ID {email_id}")
     
@@ -165,24 +183,7 @@ class InteractiveEmailCLI:
         for folder in folders:
             print(f"  {folder}")
     
-    async def get_email_count(
-        self,
-        before: Optional[datetime] = None,
-        since: Optional[datetime] = None,
-        subject: Optional[str] = None,
-        from_address: Optional[str] = None,
-        to_address: Optional[str] = None,
-    ) -> None:
-        """Get the count of emails matching criteria."""
-        if not self.initialized:
-            print("Error: Client not initialized")
-            return
-            
-        print(f"\nCounting emails...")
-        
-        count = await self.client.get_email_count(before, since, subject, from_address, to_address)
-        
-        print(f"\nTotal emails matching criteria: {count}")
+
     
     async def move_email(
         self,
@@ -232,7 +233,7 @@ class InteractiveEmailCLI:
             
         print(f"\nMarking email {email_id} as {mark} in {folder}...")
         
-        success = await self.client.set_flag(email_id, folder, mark, True)
+        success = await self.client.mark_email(email_id, folder, mark)
         
         if success:
             print(f"Email marked as {mark} successfully!")
@@ -257,20 +258,26 @@ class InteractiveEmailCLI:
         for page in range(1, max_pages + 1):
             print(f"  Processing page {page}...")
             
-            emails = []
-            async for email_data in self.client.get_emails_metadata_stream(page=page, page_size=page_size):
-                emails.append(email_data)
+            response = await self.client.get_emails_metadata(page=page, page_size=page_size)
+            emails = response.emails
             
             if not emails:
                 print(f"  No more emails found after page {page}")
                 break
             
             all_emails.extend(emails)
+            
+            if len(emails) < page_size:
+                print(f"  Reached end of emails")
+                break
         
         print(f"\nExported {len(all_emails)} emails")
         
+        # Convert EmailMetadata objects to dicts for JSON serialization
+        email_dicts = [email.model_dump() for email in all_emails]
+        
         with open(output, "w", encoding="utf-8") as f:
-            json.dump(all_emails, f, indent=2, default=str)
+            json.dump(email_dicts, f, indent=2, default=str)
         
         print(f"\nExported to {output}")
     
@@ -339,11 +346,10 @@ class InteractiveEmailCLI:
             print("  2. Get email body")
             print("  3. Send email")
             print("  4. List folders")
-            print("  5. Get email count")
-            print("  6. Move email")
-            print("  7. Delete email")
-            print("  8. Mark email")
-            print("  9. Export emails")
+            print("  5. Move email")
+            print("  6. Delete email")
+            print("  7. Mark email")
+            print("  8. Export emails")
             print("  0. Exit")
             print("=" * 80)
             
@@ -361,14 +367,12 @@ class InteractiveEmailCLI:
             elif choice == "4":
                 await self._handle_list_folders()
             elif choice == "5":
-                await self._handle_get_email_count()
-            elif choice == "6":
                 await self._handle_move_email()
-            elif choice == "7":
+            elif choice == "6":
                 await self._handle_delete_email()
-            elif choice == "8":
+            elif choice == "7":
                 await self._handle_mark_email()
-            elif choice == "9":
+            elif choice == "8":
                 await self._handle_export_emails()
             else:
                 print("Error: Invalid choice. Please try again.")
@@ -467,25 +471,7 @@ class InteractiveEmailCLI:
         
         await self.list_folders(include_noselect=include_noselect)
     
-    async def _handle_get_email_count(self):
-        """Handle get email count command interactively."""
-        before_str = self.get_input("Filter by date before (YYYY-MM-DD): ", "")
-        before = self.parse_date(before_str)
-        
-        since_str = self.get_input("Filter by date since (YYYY-MM-DD): ", "")
-        since = self.parse_date(since_str)
-        
-        subject = self.get_input("Filter by subject: ", "")
-        from_address = self.get_input("Filter by sender: ", "")
-        to_address = self.get_input("Filter by recipient: ", "")
-        
-        await self.get_email_count(
-            before=before,
-            since=since,
-            subject=subject,
-            from_address=from_address,
-            to_address=to_address,
-        )
+
     
     async def _handle_move_email(self):
         """Handle move email command interactively."""

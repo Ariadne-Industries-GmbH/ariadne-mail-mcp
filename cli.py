@@ -13,11 +13,11 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from mcp_email_server.config import EmailServer, EmailSettings
-from mcp_email_server.emails.classic import EmailClient
+from mcp_email_server.emails.classic import ClassicEmailHandler
 
 
 async def list_emails(
-    client: EmailClient,
+    client: ClassicEmailHandler,
     page: int = 1,
     page_size: int = 10,
     before: Optional[datetime] = None,
@@ -30,8 +30,7 @@ async def list_emails(
     """List emails with metadata."""
     print(f"\nListing emails (page {page}, {page_size} per page)...")
     
-    emails = []
-    async for email_data in client.get_emails_metadata_stream(
+    response = await client.get_emails_metadata(
         page=page,
         page_size=page_size,
         before=before,
@@ -40,48 +39,48 @@ async def list_emails(
         from_address=from_address,
         to_address=to_address,
         order=order,
-    ):
-        emails.append(email_data)
-    
-    total = await client.get_email_count(before, since, subject, from_address, to_address)
+    )
+    emails = response.emails
+    total = response.total
     
     print(f"\nFound {len(emails)} emails (total: {total})")
     print("-" * 80)
     
     for i, email in enumerate(emails, start=1):
         print(f"\nEmail {i} of {len(emails)}:")
-        print(f"  ID: {email['email_id']}")
-        print(f"  Subject: {email['subject']}")
-        print(f"  From: {email['from']}")
-        print(f"  To: {', '.join(email['to'])}")
-        print(f"  Date: {email['date']}")
-        print(f"  Attachments: {len(email['attachments'])}")
+        print(f"  ID: {email.email_id}")
+        print(f"  Subject: {email.subject}")
+        print(f"  From: {email.sender}")
+        print(f"  To: {', '.join(email.recipients)}")
+        print(f"  Date: {email.date}")
+        print(f"  Attachments: {len(email.attachments)}")
 
 
-async def get_email_body(client: EmailClient, email_id: str) -> None:
+async def get_email_body(client: ClassicEmailHandler, email_id: str) -> None:
     """Get the full body of a specific email."""
     print(f"\nFetching email body for ID: {email_id}...")
     
-    email_data = await client.get_email_body_by_id(email_id)
+    response = await client.get_emails_content([email_id])
     
-    if email_data:
-        print(f"\nSubject: {email_data['subject']}")
-        print(f"From: {email_data['from']}")
-        print(f"To: {', '.join(email_data['to'])}")
-        print(f"Date: {email_data['date']}")
-        print(f"\nBody ({len(email_data['body'])} characters):")
+    if response.emails:
+        email = response.emails[0]
+        print(f"\nSubject: {email.subject}")
+        print(f"From: {email.sender}")
+        print(f"To: {', '.join(email.recipients)}")
+        print(f"Date: {email.date}")
+        print(f"\nBody ({len(email.body)} characters):")
         print("-" * 80)
-        print(email_data['body'])
+        print(email.body)
         print("-" * 80)
         
-        if email_data['attachments']:
-            print(f"\nAttachments: {', '.join(email_data['attachments'])}")
+        if email.attachments:
+            print(f"\nAttachments: {', '.join(email.attachments)}")
     else:
         print(f"Error: Could not retrieve email with ID {email_id}")
 
 
 async def send_email(
-    client: EmailClient,
+    client: ClassicEmailHandler,
     recipients: list[str],
     subject: str,
     body: str,
@@ -107,7 +106,7 @@ async def send_email(
         sys.exit(1)
 
 
-async def list_folders(client: EmailClient, include_noselect: bool = True) -> None:
+async def list_folders(client: ClassicEmailHandler, include_noselect: bool = True) -> None:
     """List all folders in the mail account."""
     print(f"\nListing folders (include_noselect={include_noselect})...")
     
@@ -119,24 +118,11 @@ async def list_folders(client: EmailClient, include_noselect: bool = True) -> No
         print(f"  {folder}")
 
 
-async def get_email_count(
-    client: EmailClient,
-    before: Optional[datetime] = None,
-    since: Optional[datetime] = None,
-    subject: Optional[str] = None,
-    from_address: Optional[str] = None,
-    to_address: Optional[str] = None,
-) -> None:
-    """Get the count of emails matching criteria."""
-    print(f"\nCounting emails...")
-    
-    count = await client.get_email_count(before, since, subject, from_address, to_address)
-    
-    print(f"\nTotal emails matching criteria: {count}")
+
 
 
 async def move_email(
-    client: EmailClient,
+    client: ClassicEmailHandler,
     email_id: str,
     source_folder: str,
     destination_folder: str,
@@ -153,7 +139,7 @@ async def move_email(
         sys.exit(1)
 
 
-async def delete_email(client: EmailClient, email_id: str, folder: str = "INBOX") -> None:
+async def delete_email(client: ClassicEmailHandler, email_id: str, folder: str = "INBOX") -> None:
     """Delete an email."""
     print(f"\nDeleting email {email_id} from {folder}...")
     
@@ -167,7 +153,7 @@ async def delete_email(client: EmailClient, email_id: str, folder: str = "INBOX"
 
 
 async def mark_email(
-    client: EmailClient,
+    client: ClassicEmailHandler,
     email_id: str,
     folder: str = "INBOX",
     mark: str = "read",
@@ -175,7 +161,7 @@ async def mark_email(
     """Mark an email with a flag."""
     print(f"\nMarking email {email_id} as {mark} in {folder}...")
     
-    success = await client.set_flag(email_id, folder, mark, True)
+    success = await client.mark_email(email_id, folder, mark)
     
     if success:
         print(f"Email marked as {mark} successfully!")
@@ -185,7 +171,7 @@ async def mark_email(
 
 
 async def export_emails(
-    client: EmailClient,
+    client: ClassicEmailHandler,
     output: Optional[str] = None,
     page_size: int = 100,
     max_pages: int = 10,
@@ -198,20 +184,26 @@ async def export_emails(
     for page in range(1, max_pages + 1):
         print(f"  Processing page {page}...")
         
-        emails = []
-        async for email_data in client.get_emails_metadata_stream(page=page, page_size=page_size):
-            emails.append(email_data)
+        response = await client.get_emails_metadata(page=page, page_size=page_size)
+        emails = response.emails
         
         if not emails:
             print(f"  No more emails found after page {page}")
             break
         
         all_emails.extend(emails)
+        
+        if len(emails) < page_size:
+            print(f"  Reached end of emails")
+            break
     
     print(f"\nExported {len(all_emails)} emails")
     
+    # Convert EmailMetadata objects to dicts for JSON serialization
+    email_dicts = [email.model_dump() for email in all_emails]
+    
     with open(output, "w", encoding="utf-8") as f:
-        json.dump(all_emails, f, indent=2, default=str)
+        json.dump(email_dicts, f, indent=2, default=str)
     
     print(f"\nExported to {output}")
 
@@ -281,15 +273,7 @@ Examples:
     )
     folders_parser.set_defaults(func=list_folders)
     
-    # Count command
-    count_parser = subparsers.add_parser("count", help="Count emails")
-    count_parser.add_argument("--before", type=str, help="Filter by date before (YYYY-MM-DD)")
-    count_parser.add_argument("--since", type=str, help="Filter by date since (YYYY-MM-DD)")
-    count_parser.add_argument("--subject", type=str, help="Filter by subject")
-    count_parser.add_argument("--from", "--from-address", type=str, help="Filter by sender")
-    count_parser.add_argument("--to", "--to-address", type=str, help="Filter by recipient")
-    count_parser.set_defaults(func=get_email_count)
-    
+
     # Move command
     move_parser = subparsers.add_parser("move", help="Move email")
     move_parser.add_argument("email_id", help="Email ID/UID")
@@ -310,7 +294,7 @@ Examples:
     mark_parser.add_argument(
         "--mark",
         required=True,
-        choices=["read", "unread", "flagged", "unflagged", "answered", "draft"],
+        choices=["read", "unread", "flagged", "unflagged", "answered", "unanswered", "draft"],
         help="Mark type",
     )
     mark_parser.set_defaults(func=mark_email)
@@ -351,7 +335,27 @@ Examples:
         start_ssl=config.emails[0].incoming.start_ssl,
     )
     
-    client = EmailClient(email_server)
+    # Use outgoing server for sending
+    outgoing_server = EmailServer(
+        host=config.emails[0].outgoing.host,
+        port=config.emails[0].outgoing.port,
+        user_name=config.emails[0].outgoing.user_name,
+        password=config.emails[0].outgoing.password,
+        use_ssl=config.emails[0].outgoing.use_ssl,
+        start_ssl=config.emails[0].outgoing.start_ssl,
+    )
+    
+    email_settings = EmailSettings(
+        account_name=config.emails[0].account_name,
+        email_address=config.emails[0].email_address,
+        full_name=config.emails[0].full_name,
+        incoming=email_server,
+        outgoing=outgoing_server,
+        save_to_sent=config.emails[0].save_to_sent,
+        sent_folder_name=config.emails[0].sent_folder_name,
+    )
+    
+    client = ClassicEmailHandler(email_settings)
     
     # Call the appropriate function
     # Filter out 'command' and 'func' from args as they're not needed by the functions
