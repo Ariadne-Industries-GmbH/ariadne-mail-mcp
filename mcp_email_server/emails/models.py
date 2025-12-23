@@ -4,6 +4,10 @@ from typing import Any
 from pydantic import BaseModel
 
 class EmailMetadata(BaseModel):
+    """Email metadata"""
+
+    email_id: str
+    message_id: str | None = None  # RFC 5322 Message-ID header for reply threading
     subject: str
     sender: str
     recipients: list[str]  # Recipient list
@@ -14,6 +18,7 @@ class EmailMetadata(BaseModel):
     def from_email(cls, email: dict[str, Any]):
         return cls(
             email_id=email["email_id"],
+            message_id=email.get("message_id"),
             subject=email["subject"],
             sender=email["from"],
             recipients=email.get("to", []),
@@ -37,6 +42,7 @@ class EmailBodyResponse(BaseModel):
     """Single email body response"""
 
     email_id: str  # IMAP UID of this email
+    message_id: str | None = None  # RFC 5322 Message-ID header for reply threading
     subject: str
     sender: str
     recipients: list[str]
@@ -52,3 +58,13 @@ class EmailContentBatchResponse(BaseModel):
     requested_count: int
     retrieved_count: int
     failed_ids: list[str]
+
+
+class AttachmentDownloadResponse(BaseModel):
+    """Attachment download response"""
+
+    email_id: str
+    attachment_name: str
+    mime_type: str
+    size: int
+    saved_path: str

@@ -1,11 +1,15 @@
 import email.utils
 import re
+import mimetypes
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from email.header import Header
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.parser import BytesParser
 from email.policy import default
+from pathlib import Path
 from typing import Any
 
 import aioimaplib
@@ -14,6 +18,7 @@ import aiosmtplib
 from mcp_email_server.config import EmailServer, EmailSettings
 from mcp_email_server.emails import EmailHandler
 from mcp_email_server.emails.models import (
+    AttachmentDownloadResponse,
     EmailBodyResponse,
     EmailContentBatchResponse,
     EmailMetadata,
@@ -89,6 +94,9 @@ class EmailClient:
         sender = email_message.get("From", "")
         date_str = email_message.get("Date", "")
 
+        # Extract Message-ID for reply threading
+        message_id = email_message.get("Message-ID")
+
         # Extract recipients
         to_addresses = []
         to_header = email_message.get("To", "")
@@ -149,6 +157,7 @@ class EmailClient:
             body = body[:20000] + "...[TRUNCATED]"
         return {
             "email_id": email_id or "",
+            "message_id": message_id,
             "subject": subject,
             "from": sender,
             "to": to_addresses,
@@ -196,6 +205,7 @@ class EmailClient:
         subject: str | None = None,
         from_address: str | None = None,
         to_address: str | None = None,
+        mailbox: str = "INBOX",
     ) -> int:
         imap = self.imap_class(self.email_server.host, self.email_server.port)
         try:
@@ -205,7 +215,7 @@ class EmailClient:
 
             # Login and select inbox
             await imap.login(self.email_server.user_name, self.email_server.password)
-            await imap.select("INBOX")
+            await imap.select(mailbox)
             search_criteria = self._build_search_criteria(
                 before, since, subject, from_address=from_address, to_address=to_address
             )
@@ -230,6 +240,7 @@ class EmailClient:
         from_address: str | None = None,
         to_address: str | None = None,
         order: str = "desc",
+        mailbox: str = "INBOX",
     ) -> AsyncGenerator[dict[str, Any], None]:
         imap = self.imap_class(self.email_server.host, self.email_server.port)
         try:
@@ -243,7 +254,7 @@ class EmailClient:
                 await imap.id(name="mcp-email-server", version="1.0.0")
             except Exception as e:
                 logger.warning(f"IMAP ID command failed: {e!s}")
-            await imap.select("INBOX")
+            await imap.select(mailbox)
 
             search_criteria = self._build_search_criteria(
                 before, since, subject, from_address=from_address, to_address=to_address
@@ -394,7 +405,7 @@ class EmailClient:
 
         return None
 
-    async def get_email_body_by_id(self, email_id: str) -> dict[str, Any] | None:
+    async def get_email_body_by_id(self, email_id: str, mailbox: str = "INBOX") -> dict[str, Any] | None:
         imap = self.imap_class(self.email_server.host, self.email_server.port)
         try:
             # Wait for the connection to be established
@@ -407,7 +418,7 @@ class EmailClient:
                 await imap.id(name="mcp-email-server", version="1.0.0")
             except Exception as e:
                 logger.warning(f"IMAP ID command failed: {e!s}")
-            await imap.select("INBOX")
+            await imap.select(mailbox)
 
             # Fetch the specific email by UID
             data = await self._fetch_email_with_formats(imap, email_id)
@@ -435,6 +446,131 @@ class EmailClient:
             except Exception as e:
                 logger.info(f"Error during logout: {e}")
 
+    async def download_attachment(
+        self,
+        email_id: str,
+        attachment_name: str,
+        save_path: str,
+    ) -> dict[str, Any]:
+        """Download a specific attachment from an email and save it to disk."""
+        imap = self.imap_class(self.email_server.host, self.email_server.port)
+        try:
+            await imap._client_task
+            await imap.wait_hello_from_server()
+
+            await imap.login(self.email_server.user_name, self.email_server.password)
+            try:
+                await imap.id(name="mcp-email-server", version="1.0.0")
+            except Exception as e:
+                logger.warning(f"IMAP ID command failed: {e!s}")
+            await imap.select("INBOX")
+
+            data = await self._fetch_email_with_formats(imap, email_id)
+            if not data:
+                msg = f"Failed to fetch email with UID {email_id}"
+                logger.error(msg)
+                raise ValueError(msg)
+
+            raw_email = self._extract_raw_email(data)
+            if not raw_email:
+                msg = f"Could not find email data for email ID: {email_id}"
+                logger.error(msg)
+                raise ValueError(msg)
+
+            parser = BytesParser(policy=default)
+            email_message = parser.parsebytes(raw_email)
+
+            # Find the attachment
+            attachment_data = None
+            mime_type = None
+
+            if email_message.is_multipart():
+                for part in email_message.walk():
+                    content_disposition = str(part.get("Content-Disposition", ""))
+                    if "attachment" in content_disposition:
+                        filename = part.get_filename()
+                        if filename == attachment_name:
+                            attachment_data = part.get_payload(decode=True)
+                            mime_type = part.get_content_type()
+                            break
+
+            if attachment_data is None:
+                msg = f"Attachment '{attachment_name}' not found in email {email_id}"
+                logger.error(msg)
+                raise ValueError(msg)
+
+            # Save to disk
+            save_file = Path(save_path)
+            save_file.parent.mkdir(parents=True, exist_ok=True)
+            save_file.write_bytes(attachment_data)
+
+            logger.info(f"Attachment '{attachment_name}' saved to {save_path}")
+
+            return {
+                "email_id": email_id,
+                "attachment_name": attachment_name,
+                "mime_type": mime_type or "application/octet-stream",
+                "size": len(attachment_data),
+                "saved_path": str(save_file.resolve()),
+            }
+
+        finally:
+            try:
+                await imap.logout()
+            except Exception as e:
+                logger.info(f"Error during logout: {e}")
+
+    def _validate_attachment(self, file_path: str) -> Path:
+        """Validate attachment file path."""
+        path = Path(file_path)
+        if not path.exists():
+            msg = f"Attachment file not found: {file_path}"
+            logger.error(msg)
+            raise FileNotFoundError(msg)
+
+        if not path.is_file():
+            msg = f"Attachment path is not a file: {file_path}"
+            logger.error(msg)
+            raise ValueError(msg)
+
+        return path
+
+    def _create_attachment_part(self, path: Path) -> MIMEApplication:
+        """Create MIME attachment part from file."""
+        with open(path, "rb") as f:
+            file_data = f.read()
+
+        mime_type, _ = mimetypes.guess_type(str(path))
+        if mime_type is None:
+            mime_type = "application/octet-stream"
+
+        attachment_part = MIMEApplication(file_data, _subtype=mime_type.split("/")[1])
+        attachment_part.add_header(
+            "Content-Disposition",
+            "attachment",
+            filename=path.name,
+        )
+        logger.info(f"Attached file: {path.name} ({mime_type})")
+        return attachment_part
+
+    def _create_message_with_attachments(self, body: str, html: bool, attachments: list[str]) -> MIMEMultipart:
+        """Create multipart message with attachments."""
+        msg = MIMEMultipart()
+        content_type = "html" if html else "plain"
+        text_part = MIMEText(body, content_type, "utf-8")
+        msg.attach(text_part)
+
+        for file_path in attachments:
+            try:
+                path = self._validate_attachment(file_path)
+                attachment_part = self._create_attachment_part(path)
+                msg.attach(attachment_part)
+            except Exception as e:
+                logger.error(f"Failed to attach file {file_path}: {e}")
+                raise
+
+        return msg
+
     async def send_email(
         self,
         recipients: list[str],
@@ -443,10 +579,16 @@ class EmailClient:
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
         html: bool = False,
+        attachments: list[str] | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
     ):
-        # Create message with UTF-8 encoding to support special characters
-        content_type = "html" if html else "plain"
-        msg = MIMEText(body, content_type, "utf-8")
+        # Create message with or without attachments
+        if attachments:
+            msg = self._create_message_with_attachments(body, html, attachments)
+        else:
+            content_type = "html" if html else "plain"
+            msg = MIMEText(body, content_type, "utf-8")
 
         # Handle subject with special characters
         if any(ord(c) > 127 for c in subject):
@@ -465,6 +607,12 @@ class EmailClient:
         # Add CC header if provided (visible to recipients)
         if cc:
             msg["Cc"] = ", ".join(cc)
+
+        # Set threading headers for replies
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+        if references:
+            msg["References"] = references
 
         # Note: BCC recipients are not added to headers (they remain hidden)
         # but will be included in the actual recipients for SMTP delivery
@@ -485,6 +633,121 @@ class EmailClient:
                 all_recipients.extend(bcc)
 
             await smtp.send_message(msg, recipients=all_recipients)
+
+        # Return the message for potential saving to Sent folder
+        return msg
+
+    async def append_to_sent(
+        self,
+        msg: MIMEText | MIMEMultipart,
+        incoming_server: EmailServer,
+        sent_folder_name: str | None = None,
+    ) -> bool:
+        """Append a sent message to the IMAP Sent folder.
+
+        Args:
+            msg: The email message that was sent
+            incoming_server: IMAP server configuration for accessing Sent folder
+            sent_folder_name: Override folder name, or None for auto-detection
+
+        Returns:
+            True if successfully saved, False otherwise
+        """
+        imap_class = aioimaplib.IMAP4_SSL if incoming_server.use_ssl else aioimaplib.IMAP4
+        imap = imap_class(incoming_server.host, incoming_server.port)
+
+        # Common Sent folder names across different providers
+        sent_folder_candidates = [
+            sent_folder_name,  # User-specified override (if provided)
+            "Sent",
+            "INBOX.Sent",
+            "Sent Items",
+            "Sent Mail",
+            "[Gmail]/Sent Mail",
+            "INBOX/Sent",
+        ]
+        # Filter out None values
+        sent_folder_candidates = [f for f in sent_folder_candidates if f]
+
+        try:
+            await imap._client_task
+            await imap.wait_hello_from_server()
+            await imap.login(incoming_server.user_name, incoming_server.password)
+
+            # Try to find and use the Sent folder
+            for folder in sent_folder_candidates:
+                try:
+                    logger.debug(f"Trying Sent folder: '{folder}'")
+                    # Try to select the folder to verify it exists
+                    result = await imap.select(folder)
+                    logger.debug(f"Select result for '{folder}': {result}")
+
+                    # aioimaplib returns (status, data) where status is a string like 'OK' or 'NO'
+                    status = result[0] if isinstance(result, tuple) else result
+                    if str(status).upper() == "OK":
+                        # Folder exists, append the message
+                        msg_bytes = msg.as_bytes()
+                        logger.debug(f"Appending message to '{folder}'")
+                        # aioimaplib.append signature: (message_bytes, mailbox, flags, date)
+                        append_result = await imap.append(
+                            msg_bytes,
+                            mailbox=folder,
+                            flags=r"(\Seen)",
+                        )
+                        logger.debug(f"Append result: {append_result}")
+                        append_status = append_result[0] if isinstance(append_result, tuple) else append_result
+                        if str(append_status).upper() == "OK":
+                            logger.info(f"Saved sent email to '{folder}'")
+                            return True
+                        else:
+                            logger.warning(f"Failed to append to '{folder}': {append_status}")
+                    else:
+                        logger.debug(f"Folder '{folder}' select returned: {status}")
+                except Exception as e:
+                    logger.debug(f"Folder '{folder}' not available: {e}")
+                    continue
+
+            logger.warning("Could not find a valid Sent folder to save the message")
+            return False
+
+        except Exception as e:
+            logger.error(f"Error saving to Sent folder: {e}")
+            return False
+        finally:
+            try:
+                await imap.logout()
+            except Exception as e:
+                logger.debug(f"Error during logout: {e}")
+
+    async def delete_emails(self, email_ids: list[str], mailbox: str = "INBOX") -> tuple[list[str], list[str]]:
+        """Delete emails by their UIDs. Returns (deleted_ids, failed_ids)."""
+        imap = self.imap_class(self.email_server.host, self.email_server.port)
+        deleted_ids = []
+        failed_ids = []
+
+        try:
+            await imap._client_task
+            await imap.wait_hello_from_server()
+            await imap.login(self.email_server.user_name, self.email_server.password)
+            await imap.select(mailbox)
+
+            for email_id in email_ids:
+                try:
+                    await imap.uid("store", email_id, "+FLAGS", r"(\Deleted)")
+                    deleted_ids.append(email_id)
+                except Exception as e:
+                    logger.error(f"Failed to delete email {email_id}: {e}")
+                    failed_ids.append(email_id)
+
+            await imap.expunge()
+        finally:
+            try:
+                await imap.logout()
+            except Exception as e:
+                logger.info(f"Error during logout: {e}")
+
+        return deleted_ids, failed_ids
+
 
     async def list_folders(self, include_noselect: bool = True) -> list[str]:
         """Listet alle Ordner-Namen robust (Literals, Quoted, Atom, IMAP-UTF7)."""
@@ -632,6 +895,8 @@ class ClassicEmailHandler(EmailHandler):
             email_settings.outgoing,
             sender=f"{email_settings.full_name} <{email_settings.email_address}>",
         )
+        self.save_to_sent = email_settings.save_to_sent
+        self.sent_folder_name = email_settings.sent_folder_name
 
     async def get_emails_metadata(
         self,
@@ -643,14 +908,15 @@ class ClassicEmailHandler(EmailHandler):
         from_address: str | None = None,
         to_address: str | None = None,
         order: str = "desc",
+        mailbox: str = "INBOX",
     ) -> EmailMetadataPageResponse:
         emails = []
         async for email_data in self.incoming_client.get_emails_metadata_stream(
-            page, page_size, before, since, subject, from_address, to_address, order
+            page, page_size, before, since, subject, from_address, to_address, order, mailbox
         ):
             emails.append(EmailMetadata.from_email(email_data))
         total = await self.incoming_client.get_email_count(
-            before, since, subject, from_address=from_address, to_address=to_address
+            before, since, subject, from_address=from_address, to_address=to_address, mailbox=mailbox
         )
         return EmailMetadataPageResponse(
             page=page,
@@ -662,18 +928,19 @@ class ClassicEmailHandler(EmailHandler):
             total=total,
         )
 
-    async def get_emails_content(self, email_ids: list[str]) -> EmailContentBatchResponse:
+    async def get_emails_content(self, email_ids: list[str], mailbox: str = "INBOX") -> EmailContentBatchResponse:
         """Batch retrieve email body content"""
         emails = []
         failed_ids = []
 
         for email_id in email_ids:
             try:
-                email_data = await self.incoming_client.get_email_body_by_id(email_id)
+                email_data = await self.incoming_client.get_email_body_by_id(email_id, mailbox)
                 if email_data:
                     emails.append(
                         EmailBodyResponse(
                             email_id=email_data["email_id"],
+                            message_id=email_data.get("message_id"),
                             subject=email_data["subject"],
                             sender=email_data["from"],
                             recipients=email_data["to"],
@@ -694,17 +961,6 @@ class ClassicEmailHandler(EmailHandler):
             retrieved_count=len(emails),
             failed_ids=failed_ids,
         )
-
-    async def send_email(
-        self,
-        recipients: list[str],
-        subject: str,
-        body: str,
-        cc: list[str] | None = None,
-        bcc: list[str] | None = None,
-        html: bool = False,
-    ) -> None:
-        await self.outgoing_client.send_email(recipients, subject, body, cc, bcc)
 
     async def list_folders(self) -> list[str]:
         """List all folders in the mail account."""
@@ -786,3 +1042,4 @@ class ClassicEmailHandler(EmailHandler):
         }
         flag, add = mapping.get(mark, ("\\\\Seen", True))
         return await self.incoming_client.set_flag(message_id, folder, flag, add)
+

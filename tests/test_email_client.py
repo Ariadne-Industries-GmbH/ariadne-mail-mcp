@@ -262,3 +262,95 @@ This is the email body."""
             assert "recipient@example.com" in recipients
             assert "cc@example.com" in recipients
             assert "bcc@example.com" in recipients
+
+
+class TestParseEmailData:
+    def test_parse_email_extracts_message_id(self, email_client):
+        """Test that Message-ID header is extracted during parsing."""
+        raw_email = b"""Message-ID: <test123@example.com>
+From: sender@example.com
+To: recipient@example.com
+Subject: Test Subject
+Date: Mon, 1 Jan 2024 12:00:00 +0000
+
+Test body content
+"""
+        result = email_client._parse_email_data(raw_email, email_id="1")
+        assert result["message_id"] == "<test123@example.com>"
+
+    def test_parse_email_handles_missing_message_id(self, email_client):
+        """Test graceful handling when Message-ID is missing."""
+        raw_email = b"""From: sender@example.com
+To: recipient@example.com
+Subject: Test Subject
+Date: Mon, 1 Jan 2024 12:00:00 +0000
+
+Test body content
+"""
+        result = email_client._parse_email_data(raw_email, email_id="1")
+        assert result["message_id"] is None
+
+
+class TestSendEmailReplyHeaders:
+    @pytest.mark.asyncio
+    async def test_send_email_sets_in_reply_to_header(self, email_client):
+        """Test that In-Reply-To header is set when provided."""
+        mock_smtp = AsyncMock()
+        mock_smtp.__aenter__.return_value = mock_smtp
+        mock_smtp.__aexit__.return_value = None
+        mock_smtp.login = AsyncMock()
+        mock_smtp.send_message = AsyncMock()
+
+        with patch("aiosmtplib.SMTP", return_value=mock_smtp):
+            await email_client.send_email(
+                recipients=["recipient@example.com"],
+                subject="Re: Test",
+                body="Reply body",
+                in_reply_to="<original123@example.com>",
+            )
+
+            call_args = mock_smtp.send_message.call_args
+            msg = call_args[0][0]
+            assert msg["In-Reply-To"] == "<original123@example.com>"
+
+    @pytest.mark.asyncio
+    async def test_send_email_sets_references_header(self, email_client):
+        """Test that References header is set when provided."""
+        mock_smtp = AsyncMock()
+        mock_smtp.__aenter__.return_value = mock_smtp
+        mock_smtp.__aexit__.return_value = None
+        mock_smtp.login = AsyncMock()
+        mock_smtp.send_message = AsyncMock()
+
+        with patch("aiosmtplib.SMTP", return_value=mock_smtp):
+            await email_client.send_email(
+                recipients=["recipient@example.com"],
+                subject="Re: Test",
+                body="Reply body",
+                references="<first@example.com> <second@example.com>",
+            )
+
+            call_args = mock_smtp.send_message.call_args
+            msg = call_args[0][0]
+            assert msg["References"] == "<first@example.com> <second@example.com>"
+
+    @pytest.mark.asyncio
+    async def test_send_email_without_reply_headers(self, email_client):
+        """Test that send works without reply headers (backward compatibility)."""
+        mock_smtp = AsyncMock()
+        mock_smtp.__aenter__.return_value = mock_smtp
+        mock_smtp.__aexit__.return_value = None
+        mock_smtp.login = AsyncMock()
+        mock_smtp.send_message = AsyncMock()
+
+        with patch("aiosmtplib.SMTP", return_value=mock_smtp):
+            await email_client.send_email(
+                recipients=["recipient@example.com"],
+                subject="Test",
+                body="Body",
+            )
+
+            call_args = mock_smtp.send_message.call_args
+            msg = call_args[0][0]
+            assert "In-Reply-To" not in msg
+            assert "References" not in msg

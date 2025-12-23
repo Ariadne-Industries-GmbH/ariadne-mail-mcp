@@ -63,21 +63,92 @@ You can also configure the email server using environment variables, which is pa
 
 #### Available Environment Variables
 
-| Variable                          | Description        | Default       | Required |
-| --------------------------------- | ------------------ | ------------- | -------- |
-| `MCP_EMAIL_SERVER_ACCOUNT_NAME`   | Account identifier | `"default"`   | No       |
-| `MCP_EMAIL_SERVER_FULL_NAME`      | Display name       | Email prefix  | No       |
-| `MCP_EMAIL_SERVER_EMAIL_ADDRESS`  | Email address      | -             | Yes      |
-| `MCP_EMAIL_SERVER_USER_NAME`      | Login username     | Same as email | No       |
-| `MCP_EMAIL_SERVER_PASSWORD`       | Email password     | -             | Yes      |
-| `MCP_EMAIL_SERVER_IMAP_HOST`      | IMAP server host   | -             | Yes      |
-| `MCP_EMAIL_SERVER_IMAP_PORT`      | IMAP server port   | `993`         | No       |
-| `MCP_EMAIL_SERVER_IMAP_SSL`       | Enable IMAP SSL    | `true`        | No       |
-| `MCP_EMAIL_SERVER_SMTP_HOST`      | SMTP server host   | -             | Yes      |
-| `MCP_EMAIL_SERVER_SMTP_PORT`      | SMTP server port   | `465`         | No       |
-| `MCP_EMAIL_SERVER_SMTP_SSL`       | Enable SMTP SSL    | `true`        | No       |
-| `MCP_EMAIL_SERVER_SMTP_START_SSL` | Enable STARTTLS    | `false`       | No       |
-| `MCP_EMAIL_SERVER_ENABLE_SENDING` | Allow `send_email` | `false`       | No       |
+| Variable                                      | Description                                      | Default       | Required |
+| --------------------------------------------- | ------------------------------------------------ | ------------- | -------- |
+| `MCP_EMAIL_SERVER_ACCOUNT_NAME`               | Account identifier                               | `"default"`   | No       |
+| `MCP_EMAIL_SERVER_FULL_NAME`                  | Display name                                     | Email prefix  | No       |
+| `MCP_EMAIL_SERVER_EMAIL_ADDRESS`              | Email address                                    | -             | Yes      |
+| `MCP_EMAIL_SERVER_USER_NAME`                  | Login username                                   | Same as email | No       |
+| `MCP_EMAIL_SERVER_PASSWORD`                   | Email password                                   | -             | Yes      |
+| `MCP_EMAIL_SERVER_IMAP_HOST`                  | IMAP server host                                 | -             | Yes      |
+| `MCP_EMAIL_SERVER_IMAP_PORT`                  | IMAP server port                                 | `993`         | No       |
+| `MCP_EMAIL_SERVER_IMAP_SSL`                   | Enable IMAP SSL                                  | `true`        | No       |
+| `MCP_EMAIL_SERVER_SMTP_HOST`                  | SMTP server host                                 | -             | Yes      |
+| `MCP_EMAIL_SERVER_SMTP_PORT`                  | SMTP server port                                 | `465`         | No       |
+| `MCP_EMAIL_SERVER_SMTP_SSL`                   | Enable SMTP SSL                                  | `true`        | No       |
+| `MCP_EMAIL_SERVER_SMTP_START_SSL`             | Enable STARTTLS                                  | `false`       | No       |
+| `MCP_EMAIL_SERVER_ENABLE_ATTACHMENT_DOWNLOAD` | Enable attachment download                       | `false`       | No       |
+| `MCP_EMAIL_SERVER_SAVE_TO_SENT`               | Save sent emails to IMAP Sent folder             | `true`        | No       |
+| `MCP_EMAIL_SERVER_SENT_FOLDER_NAME`           | Custom Sent folder name (auto-detect if not set) | -             | No       |
+
+### Enabling Attachment Downloads
+
+By default, downloading email attachments is disabled for security reasons. To enable this feature, you can either:
+
+**Option 1: Environment Variable**
+
+```json
+{
+  "mcpServers": {
+    "zerolib-email": {
+      "command": "uvx",
+      "args": ["mcp-email-server@latest", "stdio"],
+      "env": {
+        "MCP_EMAIL_SERVER_ENABLE_ATTACHMENT_DOWNLOAD": "true"
+      }
+    }
+  }
+}
+```
+
+**Option 2: TOML Configuration**
+
+Add `enable_attachment_download = true` to your TOML configuration file (`~/.config/zerolib/mcp_email_server/config.toml`):
+
+```toml
+enable_attachment_download = true
+
+[[emails]]
+# ... your email configuration
+```
+
+Once enabled, you can use the `download_attachment` tool to save email attachments to a specified path.
+
+### Saving Sent Emails to IMAP Sent Folder
+
+By default, sent emails are automatically saved to your IMAP Sent folder. This ensures that emails sent via the MCP server appear in your email client (Thunderbird, webmail, etc.).
+
+The server auto-detects common Sent folder names: `Sent`, `INBOX.Sent`, `Sent Items`, `Sent Mail`, `[Gmail]/Sent Mail`.
+
+**To specify a custom Sent folder name** (useful for providers with non-standard folder names):
+
+**Option 1: Environment Variable**
+
+```json
+{
+  "mcpServers": {
+    "zerolib-email": {
+      "command": "uvx",
+      "args": ["mcp-email-server@latest", "stdio"],
+      "env": {
+        "MCP_EMAIL_SERVER_SENT_FOLDER_NAME": "INBOX.Sent"
+      }
+    }
+  }
+}
+```
+
+**Option 2: TOML Configuration**
+
+```toml
+[[emails]]
+account_name = "work"
+save_to_sent = true
+sent_folder_name = "INBOX.Sent"
+# ... rest of your email configuration
+```
+
+**To disable saving to Sent folder**, set `MCP_EMAIL_SERVER_SAVE_TO_SENT=false` or `save_to_sent = false` in your TOML config.
 
 For separate IMAP/SMTP credentials, you can also use:
 
@@ -169,6 +240,34 @@ Example invocation (arguments shape) for `page_email`:
   "order": "desc"
 }
 ```
+
+## Usage
+
+### Replying to Emails
+
+To reply to an email with proper threading (so it appears in the same conversation in email clients):
+
+1. First, fetch the original email to get its `message_id`:
+
+```python
+emails = await get_emails_content(account_name="work", email_ids=["123"])
+original = emails.emails[0]
+```
+
+2. Send your reply using `in_reply_to` and `references`:
+
+```python
+await send_email(
+    account_name="work",
+    recipients=[original.sender],
+    subject=f"Re: {original.subject}",
+    body="Thank you for your email...",
+    in_reply_to=original.message_id,
+    references=original.message_id,
+)
+```
+
+The `in_reply_to` parameter sets the `In-Reply-To` header, and `references` sets the `References` header. Both are used by email clients to thread conversations properly.
 
 ## Development
 

@@ -1,6 +1,10 @@
 from datetime import datetime, timezone
 
-from mcp_email_server.emails.models import EmailMetadata, EmailMetadataPageResponse
+from mcp_email_server.emails.models import (
+    EmailBodyResponse,
+    EmailMetadata,
+    EmailMetadataPageResponse,
+)
 
 
 class TestEmailMetadata:
@@ -8,6 +12,7 @@ class TestEmailMetadata:
         """Test initialization with valid data."""
         email_data = EmailMetadata(
             email_id="123",
+            message_id=None,
             subject="Test Subject",
             sender="test@example.com",
             recipients=["recipient@example.com"],
@@ -41,6 +46,35 @@ class TestEmailMetadata:
         assert email_data.date == now
         assert email_data.attachments == ["file1.txt", "file2.pdf"]
 
+    def test_from_email_with_message_id(self):
+        """Test from_email extracts message_id when present."""
+        now = datetime.now(timezone.utc)
+        email_dict = {
+            "email_id": "123",
+            "message_id": "<test@example.com>",
+            "subject": "Test Subject",
+            "from": "test@example.com",
+            "to": ["recipient@example.com"],
+            "date": now,
+            "attachments": [],
+        }
+        email_data = EmailMetadata.from_email(email_dict)
+        assert email_data.message_id == "<test@example.com>"
+
+    def test_from_email_without_message_id(self):
+        """Test from_email handles missing message_id."""
+        now = datetime.now(timezone.utc)
+        email_dict = {
+            "email_id": "123",
+            "subject": "Test Subject",
+            "from": "test@example.com",
+            "to": ["recipient@example.com"],
+            "date": now,
+            "attachments": [],
+        }
+        email_data = EmailMetadata.from_email(email_dict)
+        assert email_data.message_id is None
+
 
 class TestEmailMetadataPageResponse:
     def test_init(self):
@@ -48,6 +82,7 @@ class TestEmailMetadataPageResponse:
         now = datetime.now(timezone.utc)
         email_data = EmailMetadata(
             email_id="123",
+            message_id=None,
             subject="Test Subject",
             sender="test@example.com",
             recipients=["recipient@example.com"],
@@ -90,3 +125,46 @@ class TestEmailMetadataPageResponse:
         assert response.page_size == 10
         assert len(response.emails) == 0
         assert response.total == 0
+
+
+def test_email_metadata_includes_message_id():
+    """Test that EmailMetadata includes message_id field."""
+    metadata = EmailMetadata(
+        email_id="123",
+        message_id="<abc123@example.com>",
+        subject="Test",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        date=datetime.now(timezone.utc),
+        attachments=[],
+    )
+    assert metadata.message_id == "<abc123@example.com>"
+
+
+def test_email_metadata_message_id_optional():
+    """Test that message_id can be None."""
+    metadata = EmailMetadata(
+        email_id="123",
+        message_id=None,
+        subject="Test",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        date=datetime.now(timezone.utc),
+        attachments=[],
+    )
+    assert metadata.message_id is None
+
+
+def test_email_body_response_includes_message_id():
+    """Test that EmailBodyResponse includes message_id field."""
+    response = EmailBodyResponse(
+        email_id="123",
+        message_id="<abc123@example.com>",
+        subject="Test",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        date=datetime.now(timezone.utc),
+        body="Test body",
+        attachments=[],
+    )
+    assert response.message_id == "<abc123@example.com>"

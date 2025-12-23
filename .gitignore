@@ -144,3 +144,4 @@ local/
 main.dist/
 main.bin
 mcp_email_server/config.toml
+config.toml
