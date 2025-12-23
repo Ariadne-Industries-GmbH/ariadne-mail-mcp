@@ -212,9 +212,9 @@ class InteractiveEmailCLI:
             
         print(f"\nDeleting email {email_id} from {folder}...")
         
-        success = await self.client.delete_email(email_id, folder)
+        deleted_ids, failed_ids = await self.client.delete_emails([email_id], folder)
         
-        if success:
+        if deleted_ids:
             print("Email deleted successfully!")
         else:
             print("Error: Failed to delete email")

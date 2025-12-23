@@ -218,18 +218,12 @@ async def move_email(
     message_id: Annotated[str, Field(description="The ID of the email to move.")],
     source_folder: Annotated[str, Field(description="The source folder of the email.")],
     destination_folder: Annotated[str, Field(description="The destination folder of the email.")],
-) -> bool:
+) -> str:
     handler = dispatch_handler(account_name)
-    return await handler.move_email(message_id, source_folder, destination_folder)
+    success = await handler.move_email(message_id, source_folder, destination_folder)
+    return "Email moved successfully!" if success else "Failed to move email"
 
-@mcp.tool(description="Delete an email from the specified folder.")
-async def delete_email(
-    account_name: Annotated[str, Field(description="The name of the email account.")],
-    message_id: Annotated[str, Field(description="The ID of the email to delete.")],
-    folder: Annotated[str, Field(default="INBOX", description="The folder containing the email.")] = "INBOX",
-) -> bool:
-    handler = dispatch_handler(account_name)
-    return await handler.delete_email(message_id, folder)
+
 
 @mcp.tool(description="Get the full body of an email.")
 async def get_full_email_body(

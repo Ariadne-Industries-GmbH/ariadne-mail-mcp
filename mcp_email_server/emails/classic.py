@@ -811,7 +811,7 @@ class EmailClient:
                 logger.info(f"Error during logout: {e}")
 
     async def move_email(self, message_id: str, source_folder: str, destination_folder: str) -> bool:
-        """Move an email from one folder to another."""
+        """Move an email from one folder to another using UID commands."""
         imap = self.imap_class(self.email_server.host, self.email_server.port)
         try:
             # Wait for the connection to be established
@@ -822,11 +822,11 @@ class EmailClient:
             await imap.login(self.email_server.user_name, self.email_server.password)
             await imap.select(source_folder)
 
-            # Copy the email to the destination folder
-            await imap.copy(message_id, destination_folder)
+            # Copy the email to the destination folder using UID
+            await imap.uid("COPY", message_id, destination_folder)
 
-            # Delete the email from the source folder
-            await imap.store(message_id, "+FLAGS", "\\Deleted")
+            # Delete the email from the source folder using UID
+            await imap.uid("STORE", message_id, "+FLAGS", "(\\Deleted)")
             await imap.expunge()
 
             return True
@@ -840,35 +840,10 @@ class EmailClient:
             except Exception as e:
                 logger.info(f"Error during logout: {e}")
 
-    async def delete_email(self, message_id: str, folder: str = "INBOX") -> bool:
-        """Move an email to the trash (delete an email)."""
-        imap = self.imap_class(self.email_server.host, self.email_server.port)
-        try:
-            # Wait for the connection to be established
-            await imap._client_task
-            await imap.wait_hello_from_server()
 
-            # Login and select folder
-            await imap.login(self.email_server.user_name, self.email_server.password)
-            await imap.select(folder)
-
-            # Mark the email as deleted
-            await imap.store(message_id, "+FLAGS", "\\Deleted")
-            await imap.expunge()
-
-            return True
-        except Exception as e:
-            logger.error(f"Error deleting email: {e!s}")
-            return False
-        finally:
-            # Ensure we logout properly
-            try:
-                await imap.logout()
-            except Exception as e:
-                logger.info(f"Error during logout: {e}")
 
     async def set_flag(self, message_id: str, folder: str, flag: str, add: bool) -> bool:
-        """Add or remove an IMAP flag on a message."""
+        """Add or remove an IMAP flag on a message using UID commands."""
         imap = self.imap_class(self.email_server.host, self.email_server.port)
         try:
             await imap._client_task
@@ -876,7 +851,7 @@ class EmailClient:
             await imap.login(self.email_server.user_name, self.email_server.password)
             await imap.select(folder)
             try:
-                await imap.store(message_id, "+FLAGS" if add else "-FLAGS", flag)
+                await imap.uid("STORE", message_id, "+FLAGS" if add else "-FLAGS", flag)
                 return True
             except Exception as e:
                 logger.error(f"Error setting flag {flag} (add={add}) on {message_id}: {e!s}")
@@ -970,9 +945,7 @@ class ClassicEmailHandler(EmailHandler):
         """Move an email from one folder to another."""
         return await self.incoming_client.move_email(message_id, source_folder, destination_folder)
 
-    async def delete_email(self, message_id: str, folder: str = "INBOX") -> bool:
-        """Move an email to the trash (delete an email)."""
-        return await self.incoming_client.delete_email(message_id, folder)
+
 
 
     async def get_full_email_body(self, message_id: str, folder: str = "INBOX") -> str:
@@ -1042,4 +1015,55 @@ class ClassicEmailHandler(EmailHandler):
         }
         flag, add = mapping.get(mark, ("\\\\Seen", True))
         return await self.incoming_client.set_flag(message_id, folder, flag, add)
+
+    async def delete_emails(self, email_ids: list[str], mailbox: str = "INBOX") -> tuple[list[str], list[str]]:
+        """Delete emails by their IDs. Returns (deleted_ids, failed_ids)."""
+        return await self.incoming_client.delete_emails(email_ids, mailbox)
+
+    async def send_email(
+        self,
+        recipients: list[str],
+        subject: str,
+        body: str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        html: bool = False,
+        attachments: list[str] | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+    ) -> None:
+        """Send an email."""
+        msg = await self.outgoing_client.send_email(
+            recipients,
+            subject,
+            body,
+            cc,
+            bcc,
+            html,
+            attachments,
+            in_reply_to,
+            references,
+        )
+        
+        # Save to Sent folder if enabled
+        if self.save_to_sent and msg:
+            await self.outgoing_client.append_to_sent(
+                msg,
+                self.email_settings.incoming,
+                self.sent_folder_name,
+            )
+
+    async def download_attachment(
+        self,
+        email_id: str,
+        attachment_name: str,
+        save_path: str,
+    ) -> "AttachmentDownloadResponse":
+        """Download an email attachment and save it to the specified path."""
+        result = await self.incoming_client.download_attachment(
+            email_id,
+            attachment_name,
+            save_path,
+        )
+        return AttachmentDownloadResponse(**result)
 

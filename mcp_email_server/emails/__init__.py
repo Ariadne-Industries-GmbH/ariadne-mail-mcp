@@ -56,9 +56,7 @@ class EmailHandler(abc.ABC):
     async def move_email(self, message_id: str, source_folder: str, destination_folder: str) -> bool:
         """Move an email from one folder to another."""
 
-    @abc.abstractmethod
-    async def delete_email(self, message_id: str, folder: str = "INBOX") -> bool:
-        """Move an email to the trash (delete an email)."""
+
 
     @abc.abstractmethod
     async def get_full_email_body(self, message_id: str, folder: str = "INBOX") -> str:
