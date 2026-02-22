@@ -417,7 +417,7 @@ class TestMcpTools:
             # Call the function
             result = await move_email(
                 account_name="test_account",
-                message_id="12345",
+                email_id="12345",
                 source_folder="INBOX",
                 destination_folder="ARCHIVE",
             )
@@ -467,7 +467,7 @@ class TestMcpTools:
             # Call the function
             result = await get_full_email_body(
                 account_name="test_account",
-                message_id="12345",
+                email_id="12345",
                 folder="INBOX",
             )
 
@@ -491,7 +491,7 @@ class TestMcpTools:
             # Call the function
             result = await mark_email(
                 account_name="test_account",
-                message_id="12345",
+                email_id="12345",
                 folder="INBOX",
                 mark="read",
             )
@@ -661,3 +661,13 @@ class TestMcpTools:
             )
 
             assert result.emails[0].message_id == "<test@example.com>"
+
+    @pytest.mark.asyncio
+    async def test_get_full_email_body_rejects_rfc_message_id_header(self):
+        """Reject RFC Message-ID values where an IMAP email_id (UID) is required."""
+        with pytest.raises(ValueError, match="Expected IMAP UID `email_id`"):
+            await get_full_email_body(
+                account_name="test_account",
+                email_id="<abc123@example.com>",
+                folder="INBOX",
+            )

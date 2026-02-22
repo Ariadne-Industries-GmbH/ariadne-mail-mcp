@@ -822,7 +822,7 @@ class EmailClient:
             except Exception as e:
                 logger.info(f"Error during logout: {e}")
 
-    async def move_email(self, message_id: str, source_folder: str, destination_folder: str) -> bool:
+    async def move_email(self, email_id: str, source_folder: str, destination_folder: str) -> bool:
         """Move an email from one folder to another using UID commands."""
         imap = self.imap_class(self.email_server.host, self.email_server.port)
         try:
@@ -835,10 +835,10 @@ class EmailClient:
             await imap.select(source_folder)
 
             # Copy the email to the destination folder using UID
-            await imap.uid("COPY", message_id, destination_folder)
+            await imap.uid("COPY", email_id, destination_folder)
 
             # Delete the email from the source folder using UID
-            await imap.uid("STORE", message_id, "+FLAGS", "(\\Deleted)")
+            await imap.uid("STORE", email_id, "+FLAGS", "(\\Deleted)")
             await imap.expunge()
 
             return True
@@ -854,7 +854,7 @@ class EmailClient:
 
 
 
-    async def set_flag(self, message_id: str, folder: str, flag: str, add: bool) -> bool:
+    async def set_flag(self, email_id: str, folder: str, flag: str, add: bool) -> bool:
         """Add or remove an IMAP flag on a message using UID commands."""
         imap = self.imap_class(self.email_server.host, self.email_server.port)
         try:
@@ -863,10 +863,10 @@ class EmailClient:
             await imap.login(self.email_server.user_name, self.email_server.password)
             await imap.select(folder)
             try:
-                await imap.uid("STORE", message_id, "+FLAGS" if add else "-FLAGS", flag)
+                await imap.uid("STORE", email_id, "+FLAGS" if add else "-FLAGS", flag)
                 return True
             except Exception as e:
-                logger.error(f"Error setting flag {flag} (add={add}) on {message_id}: {e!s}")
+                logger.error(f"Error setting flag {flag} (add={add}) on {email_id}: {e!s}")
                 return False
         finally:
             try:
@@ -953,26 +953,26 @@ class ClassicEmailHandler(EmailHandler):
         """List all folders in the mail account."""
         return await self.incoming_client.list_folders()
 
-    async def move_email(self, message_id: str, source_folder: str, destination_folder: str) -> bool:
+    async def move_email(self, email_id: str, source_folder: str, destination_folder: str) -> bool:
         """Move an email from one folder to another."""
-        return await self.incoming_client.move_email(message_id, source_folder, destination_folder)
+        return await self.incoming_client.move_email(email_id, source_folder, destination_folder)
 
 
 
 
-    async def get_full_email_body(self, message_id: str, folder: str = "INBOX") -> str:
-        """Fetch the full body of an email by IMAP UID (email_id)."""
+    async def get_full_email_body(self, email_id: str, folder: str = "INBOX") -> str:
+        """Convenience wrapper to fetch only the body by IMAP UID (email_id)."""
         try:
-            email_data = await self.incoming_client.get_email_body_by_id(message_id, folder)
+            email_data = await self.incoming_client.get_email_body_by_id(email_id, folder)
             if not email_data:
-                logger.error(f"Could not fetch email body for UID: {message_id}")
+                logger.error(f"Could not fetch email body for UID: {email_id}")
                 return ""
             return email_data.get("body", "")
         except Exception as e:
-            logger.error(f"Error fetching full email body for UID {message_id}: {e!s}")
+            logger.error(f"Error fetching full email body for UID {email_id}: {e!s}")
             return ""
 
-    async def mark_email(self, message_id: str, folder: str = "INBOX", mark: str = "read") -> bool:
+    async def mark_email(self, email_id: str, folder: str = "INBOX", mark: str = "read") -> bool:
         """Mark an email with common IMAP flags.
 
         mark options:
@@ -991,7 +991,7 @@ class ClassicEmailHandler(EmailHandler):
             "draft": ("\\Draft", True),
         }
         flag, add = mapping.get(mark, ("\\Seen", True))
-        return await self.incoming_client.set_flag(message_id, folder, f"({flag})", add)
+        return await self.incoming_client.set_flag(email_id, folder, f"({flag})", add)
 
     async def delete_emails(self, email_ids: list[str], mailbox: str = "INBOX") -> tuple[list[str], list[str]]:
         """Delete emails by their IDs. Returns (deleted_ids, failed_ids)."""

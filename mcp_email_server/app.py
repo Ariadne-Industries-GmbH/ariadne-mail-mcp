@@ -20,6 +20,29 @@ from mcp_email_server.emails.models import (
 
 mcp = FastMCP("email")
 
+
+def _looks_like_rfc_message_id(value: str) -> bool:
+    value = value.strip()
+    return value.startswith("<") and value.endswith(">") and "@" in value
+
+
+def _validate_imap_uid(email_id: str) -> str:
+    email_id = email_id.strip()
+    if _looks_like_rfc_message_id(email_id):
+        raise ValueError(
+            "Expected IMAP UID `email_id` from `list_emails_metadata`, but got an RFC Message-ID header. "
+            "Use `message_id` only for email threading (`send_email` -> `in_reply_to` / `references`)."
+        )
+    if not email_id.isdigit():
+        raise ValueError(
+            f"Expected IMAP UID `email_id` as numeric string from `list_emails_metadata`, got {email_id!r}."
+        )
+    return email_id
+
+
+def _validate_imap_uids(email_ids: list[str]) -> list[str]:
+    return [_validate_imap_uid(email_id) for email_id in email_ids]
+
 @mcp.resource("email://{account_name}")
 async def get_account(account_name: str) -> EmailSettings | ProviderSettings | None:
     settings = get_settings()
@@ -96,6 +119,7 @@ async def get_emails_content(
     ],
     mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to retrieve emails from.")] = "INBOX",
 ) -> EmailContentBatchResponse:
+    email_ids = _validate_imap_uids(email_ids)
     handler = dispatch_handler(account_name)
     return await handler.get_emails_content(email_ids, mailbox)
 
@@ -175,6 +199,7 @@ async def delete_emails(
     ],
     mailbox: Annotated[str, Field(default="INBOX", description="The mailbox to delete emails from.")] = "INBOX",
 ) -> str:
+    email_ids = _validate_imap_uids(email_ids)
     handler = dispatch_handler(account_name)
     deleted_ids, failed_ids = await handler.delete_emails(email_ids, mailbox)
 
@@ -204,6 +229,7 @@ async def download_attachment(
         )
         raise PermissionError(msg)
 
+    email_id = _validate_imap_uid(email_id)
     handler = dispatch_handler(account_name)
     return await handler.download_attachment(email_id, attachment_name, save_path)
 
@@ -215,39 +241,46 @@ async def list_folders(account_name: Annotated[str, Field(description="The name 
 @mcp.tool(description="Move an email (by IMAP UID / email_id) from one folder to another.")
 async def move_email(
     account_name: Annotated[str, Field(description="The name of the email account.")],
-    message_id: Annotated[str, Field(description="The IMAP UID (email_id) of the email to move.")],
+    email_id: Annotated[str, Field(description="The IMAP UID (email_id) of the email to move.")],
     source_folder: Annotated[str, Field(description="The source folder of the email.")],
     destination_folder: Annotated[str, Field(description="The destination folder of the email.")],
 ) -> str:
+    email_id = _validate_imap_uid(email_id)
     handler = dispatch_handler(account_name)
-    success = await handler.move_email(message_id, source_folder, destination_folder)
+    success = await handler.move_email(email_id, source_folder, destination_folder)
     return "Email moved successfully!" if success else "Failed to move email"
 
 
-
-@mcp.tool(description="Get the full body of an email by IMAP UID (email_id from list_emails_metadata).")
+@mcp.tool(
+    description=(
+        "Convenient shortcut: get only the body of a single email by IMAP UID (email_id from "
+        "list_emails_metadata). Prefer get_emails_content when you also need metadata/attachments."
+    )
+)
 async def get_full_email_body(
     account_name: Annotated[str, Field(description="The name of the email account.")],
-    message_id: Annotated[
+    email_id: Annotated[
         str,
         Field(description="The IMAP UID (email_id from list_emails_metadata) of the email to retrieve."),
     ],
     folder: Annotated[str, Field(default="INBOX", description="The folder containing the email.")] = "INBOX",
 ) -> str:
+    email_id = _validate_imap_uid(email_id)
     handler = dispatch_handler(account_name)
-    return await handler.get_full_email_body(message_id, folder)
+    return await handler.get_full_email_body(email_id, folder)
 
 @mcp.tool(
     description="Mark an email (read/unread/flagged/unflagged/answered/draft) in the specified folder.",
 )
 async def mark_email(
     account_name: Annotated[str, Field(description="The name of the email account.")],
-    message_id: Annotated[str, Field(description="The IMAP UID (email_id) of the email to mark.")],
+    email_id: Annotated[str, Field(description="The IMAP UID (email_id) of the email to mark.")],
     folder: Annotated[str, Field(default="INBOX", description="The folder containing the email.")] = "INBOX",
     mark: Annotated[
         Literal["read", "unread", "flagged", "unflagged", "answered", "draft"],
         Field(description="Mark to apply: read/unread/flagged/unflagged/answered/draft."),
     ] = "read",
 ) -> bool:
+    email_id = _validate_imap_uid(email_id)
     handler = dispatch_handler(account_name)
-    return await handler.mark_email(message_id, folder, mark)
+    return await handler.mark_email(email_id, folder, mark)

@@ -53,17 +53,17 @@ class EmailHandler(abc.ABC):
         """List all folders in the mail account."""
 
     @abc.abstractmethod
-    async def move_email(self, message_id: str, source_folder: str, destination_folder: str) -> bool:
+    async def move_email(self, email_id: str, source_folder: str, destination_folder: str) -> bool:
         """Move an email by IMAP UID (email_id) from one folder to another."""
 
 
 
     @abc.abstractmethod
-    async def get_full_email_body(self, message_id: str, folder: str = "INBOX") -> str:
+    async def get_full_email_body(self, email_id: str, folder: str = "INBOX") -> str:
         """Fetch the full body of an email by IMAP UID (email_id)."""
 
     @abc.abstractmethod
-    async def mark_email(self, message_id: str, folder: str = "INBOX", mark: str = "read") -> bool:
+    async def mark_email(self, email_id: str, folder: str = "INBOX", mark: str = "read") -> bool:
         """Mark an email by IMAP UID (email_id) (read/unread/flagged/unflagged/answered/draft)."""
     
     @abc.abstractmethod

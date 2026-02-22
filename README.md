@@ -212,16 +212,20 @@ The server exposes MCP resources/tools for email workflows.
 - Tool `list_folders(account_name)` → list[str]
   - Lists IMAP folders.
 
-- Tool `move_email(account_name, message_id, source_folder, destination_folder)` → bool
+- Tool `move_email(account_name, email_id, source_folder, destination_folder)` → string
+  - `email_id` must be the IMAP UID from `list_emails_metadata` (not the RFC `message_id` header).
   - Copies to destination, flags deleted in source, expunges.
 
-- Tool `delete_email(account_name, message_id, folder=\"INBOX\")` → bool
+- Tool `delete_emails(account_name, email_ids, mailbox=\"INBOX\")` → string
+  - `email_ids` are IMAP UIDs from `list_emails_metadata`.
   - Flags deleted and expunges.
 
-- Tool `get_full_email_body(account_name, message_id, folder=\"INBOX\")` → str
-  - Fetches RFC822 and returns the parsed full body string.
+- Tool `get_full_email_body(account_name, email_id, folder=\"INBOX\")` → str
+  - Convenience wrapper for a single message body lookup by IMAP UID (`email_id`).
+  - Prefer `get_emails_content` when you also need metadata or attachments.
 
-- Tool `mark_email(account_name, message_id, folder=\"INBOX\", mark)` → bool
+- Tool `mark_email(account_name, email_id, folder=\"INBOX\", mark)` → bool
+  - `email_id` must be the IMAP UID from `list_emails_metadata`.
   - Marks message using IMAP flags. `mark` in `{ "read", "unread", "flagged", "unflagged", "answered", "draft" }`.
 
 ### Provider Accounts (Not Supported Yet)
@@ -268,6 +272,8 @@ await send_email(
 ```
 
 The `in_reply_to` parameter sets the `In-Reply-To` header, and `references` sets the `References` header. Both are used by email clients to thread conversations properly.
+
+Important: `message_id` (RFC header used for threading) is different from `email_id` (IMAP UID used by `get_emails_content`, `get_full_email_body`, `move_email`, `mark_email`, and `delete_emails`).
 
 ## Development
 
