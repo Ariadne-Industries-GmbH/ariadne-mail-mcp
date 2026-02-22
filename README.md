@@ -289,7 +289,7 @@ For more details, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/
 ## Build Binary
 
 ```bash
-pyi-makespec --onefile --name mcp_email_server main.py --collect-data gradio --collect-data gradio_client --collect-data safehttpx --hidden-import anyio --hidden-import starlette.routing
+pyi-makespec --onefile --name mcp_email_server_bin main.py --collect-data gradio --collect-data gradio_client --collect-data safehttpx --hidden-import anyio --hidden-import starlette.routing
 ```
 
 Adapt mcp_email_server.spec file:
@@ -345,7 +345,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='mcp_email_server',
+    name='mcp_email_server_bin',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -362,15 +362,28 @@ exe = EXE(
 
 ```
 
-Run pyinstaller:
+Run PyInstaller (recommended after recreating `.venv`):
 ```bash
-pyinstaller mcp_email_server_bin.spec
+uv sync --group dev
+.venv/bin/python -m PyInstaller --clean mcp_email_server.spec
+```
+
+The executable will be written to:
+
+```bash
+dist/mcp_email_server_bin
+```
+
+Alternative (if your virtualenv entrypoint scripts are valid):
+
+```bash
+.venv/bin/pyinstaller --clean mcp_email_server.spec
 ```
 
 ### Use the CLI (but this currently not works properly)
 
 ```bash
-pyinstaller --onefile --name mcp_email_server main.py --collect-data gradio --collect-data gradio_client --collect-data safehttpx --hidden-import anyio --hidden-import starlette.routing --collect-data numpy --hidden-import numpy
+pyinstaller --onefile --name mcp_email_server_bin main.py --collect-data gradio --collect-data gradio_client --collect-data safehttpx --hidden-import anyio --hidden-import starlette.routing --collect-data numpy --hidden-import numpy
 ```
 
 ```bash

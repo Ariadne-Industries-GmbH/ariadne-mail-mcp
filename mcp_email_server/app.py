@@ -212,10 +212,10 @@ async def list_folders(account_name: Annotated[str, Field(description="The name 
     handler = dispatch_handler(account_name)
     return await handler.list_folders()
 
-@mcp.tool(description="Move an email from one folder to another.")
+@mcp.tool(description="Move an email (by IMAP UID / email_id) from one folder to another.")
 async def move_email(
     account_name: Annotated[str, Field(description="The name of the email account.")],
-    message_id: Annotated[str, Field(description="The ID of the email to move.")],
+    message_id: Annotated[str, Field(description="The IMAP UID (email_id) of the email to move.")],
     source_folder: Annotated[str, Field(description="The source folder of the email.")],
     destination_folder: Annotated[str, Field(description="The destination folder of the email.")],
 ) -> str:
@@ -225,10 +225,13 @@ async def move_email(
 
 
 
-@mcp.tool(description="Get the full body of an email.")
+@mcp.tool(description="Get the full body of an email by IMAP UID (email_id from list_emails_metadata).")
 async def get_full_email_body(
     account_name: Annotated[str, Field(description="The name of the email account.")],
-    message_id: Annotated[str, Field(description="The ID of the email to retrieve the full body for.")],
+    message_id: Annotated[
+        str,
+        Field(description="The IMAP UID (email_id from list_emails_metadata) of the email to retrieve."),
+    ],
     folder: Annotated[str, Field(default="INBOX", description="The folder containing the email.")] = "INBOX",
 ) -> str:
     handler = dispatch_handler(account_name)
@@ -239,7 +242,7 @@ async def get_full_email_body(
 )
 async def mark_email(
     account_name: Annotated[str, Field(description="The name of the email account.")],
-    message_id: Annotated[str, Field(description="The ID of the email to mark.")],
+    message_id: Annotated[str, Field(description="The IMAP UID (email_id) of the email to mark.")],
     folder: Annotated[str, Field(default="INBOX", description="The folder containing the email.")] = "INBOX",
     mark: Annotated[
         Literal["read", "unread", "flagged", "unflagged", "answered", "draft"],

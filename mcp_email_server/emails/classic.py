@@ -315,6 +315,7 @@ class EmailClient:
                             subject = email_message.get("Subject", "")
                             sender = email_message.get("From", "")
                             date_str = email_message.get("Date", "")
+                            message_id = email_message.get("Message-ID")
 
                             # Extract recipients
                             to_addresses = []
@@ -341,6 +342,7 @@ class EmailClient:
                             # We'll mark it as unknown for now
                             metadata = {
                                 "email_id": email_id_str,
+                                "message_id": message_id,
                                 "subject": subject,
                                 "from": sender,
                                 "to": to_addresses,
@@ -365,12 +367,17 @@ class EmailClient:
     def _check_email_content(self, data: list) -> bool:
         """Check if the fetched data contains actual email content."""
         for item in data:
-            if isinstance(item, bytes) and b"FETCH (" in item and b"RFC822" not in item and b"BODY" not in item:
-                # This is just metadata, not actual content
-                continue
-            elif isinstance(item, bytes | bytearray) and len(item) > 100:
-                # This looks like email content
+            if isinstance(item, bytearray) and len(item) > 0:
                 return True
+            if isinstance(item, bytes):
+                if b"FETCH (" in item and b"RFC822" not in item and b"BODY" not in item:
+                    # This is just metadata, not actual content
+                    continue
+                if item in {b")", b""}:
+                    continue
+                if b"\n" in item or len(item) > 20:
+                    # This looks like email content
+                    return True
         return False
 
     def _extract_raw_email(self, data: list) -> bytes | None:
@@ -378,15 +385,20 @@ class EmailClient:
         # The email content is typically at index 1 as a bytearray
         if len(data) > 1 and isinstance(data[1], bytearray):
             return bytes(data[1])
+        if len(data) > 1 and isinstance(data[1], bytes):
+            if data[1] and b"FETCH" not in data[1]:
+                return data[1]
 
         # Search through all items for email content
         for item in data:
-            if isinstance(item, bytes | bytearray) and len(item) > 100:
-                # Skip IMAP protocol responses
-                if isinstance(item, bytes) and b"FETCH" in item:
+            if isinstance(item, bytearray) and len(item) > 0:
+                return bytes(item)
+            if isinstance(item, bytes) and len(item) > 0:
+                # Skip IMAP protocol responses and trivial terminators
+                if b"FETCH" in item or item == b")":
                     continue
                 # This is likely the email content
-                return bytes(item) if isinstance(item, bytearray) else item
+                return item
         return None
 
     async def _fetch_email_with_formats(self, imap, email_id: str) -> list | None:
@@ -949,52 +961,16 @@ class ClassicEmailHandler(EmailHandler):
 
 
     async def get_full_email_body(self, message_id: str, folder: str = "INBOX") -> str:
-        """Fetch the full body of an email."""
-        imap = self.incoming_client.imap_class(self.incoming_client.email_server.host, self.incoming_client.email_server.port)
+        """Fetch the full body of an email by IMAP UID (email_id)."""
         try:
-            # Wait for the connection to be established
-            await imap._client_task
-            await imap.wait_hello_from_server()
-
-            # Login and select folder
-            await imap.login(self.incoming_client.email_server.user_name, self.incoming_client.email_server.password)
-            await imap.select(folder)
-
-            # Fetch the email
-            _, data = await imap.fetch(message_id, "RFC822")
-
-            # Find the email data in the response
-            raw_email = None
-
-            # The actual email content is in the bytearray at index 1
-            if len(data) > 1 and isinstance(data[1], bytearray) and len(data[1]) > 0:
-                raw_email = bytes(data[1])
-            else:
-                # Fallback to searching through all items
-                for _, item in enumerate(data):
-                    if isinstance(item, bytes | bytearray) and len(item) > 100:
-                        # Skip header lines that contain FETCH
-                        if isinstance(item, bytes) and b"FETCH" in item:
-                            continue
-                        # This is likely the email content
-                        raw_email = bytes(item) if isinstance(item, bytearray) else item
-                        break
-
-            if raw_email:
-                parsed_email = self.incoming_client._parse_email_data(raw_email)
-                return parsed_email.get("body", "")
-            else:
-                logger.error(f"Could not find email data in response for message ID: {message_id}")
+            email_data = await self.incoming_client.get_email_body_by_id(message_id, folder)
+            if not email_data:
+                logger.error(f"Could not fetch email body for UID: {message_id}")
                 return ""
+            return email_data.get("body", "")
         except Exception as e:
-            logger.error(f"Error fetching full email body: {e!s}")
+            logger.error(f"Error fetching full email body for UID {message_id}: {e!s}")
             return ""
-        finally:
-            # Ensure we logout properly
-            try:
-                await imap.logout()
-            except Exception as e:
-                logger.info(f"Error during logout: {e}")
 
     async def mark_email(self, message_id: str, folder: str = "INBOX", mark: str = "read") -> bool:
         """Mark an email with common IMAP flags.
@@ -1067,4 +1043,3 @@ class ClassicEmailHandler(EmailHandler):
             save_path,
         )
         return AttachmentDownloadResponse(**result)
-
