@@ -1,14 +1,22 @@
-from datetime import datetime
 import json
 import logging
+import re
+from datetime import datetime
 from urllib.parse import urlparse
 
 import gradio as gr
 import httpx
 
-from mcp_email_server.config import DEFAULT_CONFIG_PATH, EmailSettings, get_settings, store_settings
+from mcp_email_server.config import (
+    DEFAULT_CONFIG_PATH,
+    AiSendsEmailToolSettings,
+    EmailSettings,
+    get_settings,
+    store_settings,
+)
 
 logger = logging.getLogger(__name__)
+ALLOWED_RECIPIENT_SPLIT_REGEX = re.compile(r"[,\n;]")
 
 
 def _is_valid_url(url: str) -> bool:
@@ -17,6 +25,11 @@ def _is_valid_url(url: str) -> bool:
         return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
     except Exception:
         return False
+
+
+def _parse_allowed_recipients_input(raw_text: str) -> list[str]:
+    entries = ALLOWED_RECIPIENT_SPLIT_REGEX.split(raw_text or "")
+    return [entry.strip() for entry in entries if entry.strip()]
 
 
 def create_ui():  # noqa: C901
@@ -75,6 +88,67 @@ def create_ui():  # noqa: C901
                     gr.update(visible=False),
                 )
 
+        def update_ai_send_tool_config():
+            settings = get_settings(reload=True)
+            email_accounts = [email.account_name for email in settings.emails]
+            configured_account = settings.ai_sends_email_tool.allowed_account_name
+            if configured_account not in email_accounts:
+                configured_account = None
+            recipients_text = "\n".join(settings.ai_sends_email_tool.allowed_recipients)
+            return gr.update(choices=email_accounts, value=configured_account), recipients_text
+
+        def save_ai_send_tool_config(allowed_account_name: str | None, allowed_recipients_raw: str):
+            try:
+                settings = get_settings()
+                email_accounts = {email.account_name for email in settings.emails}
+                if allowed_account_name and allowed_account_name not in email_accounts:
+                    dropdown_update, recipients_text = update_ai_send_tool_config()
+                    return "Error: Selected account does not exist.", dropdown_update, recipients_text
+
+                recipients = _parse_allowed_recipients_input(allowed_recipients_raw)
+                settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+                    allowed_account_name=allowed_account_name,
+                    allowed_recipients=recipients,
+                )
+                store_settings(settings)
+                dropdown_update, recipients_text = update_ai_send_tool_config()
+                return "Success: AI Sends Email Tool configuration saved.", dropdown_update, recipients_text
+            except Exception as e:
+                dropdown_update, recipients_text = update_ai_send_tool_config()
+                return f"Error: {e!s}", dropdown_update, recipients_text
+
+        with gr.Accordion("AI Sends Email Tool", open=True):
+            gr.Markdown(
+                "### AI Sends Email Tool Configuration\n"
+                "- Select exactly one allowed account for this tool.\n"
+                "- Enter allowed recipients as one per line or comma-separated."
+            )
+            ai_send_allowed_account = gr.Dropdown(
+                choices=[],
+                label="Allowed Account Selection",
+                interactive=True,
+                allow_custom_value=False,
+            )
+            ai_send_allowed_recipients = gr.Textbox(
+                label="Allowed Recipients List",
+                lines=6,
+                placeholder="recipient1@example.com\nrecipient2@example.com",
+            )
+            ai_send_status = gr.Markdown("")
+            ai_send_save_btn = gr.Button("Save AI Sends Email Tool Settings")
+
+            ai_send_save_btn.click(
+                fn=save_ai_send_tool_config,
+                inputs=[ai_send_allowed_account, ai_send_allowed_recipients],
+                outputs=[ai_send_status, ai_send_allowed_account, ai_send_allowed_recipients],
+            )
+
+            app.load(
+                fn=update_ai_send_tool_config,
+                inputs=None,
+                outputs=[ai_send_allowed_account, ai_send_allowed_recipients],
+            )
+
         # Display current email accounts and allow deletion
         with gr.Accordion("Current Email Accounts", open=True):
             # Display the list of accounts
@@ -110,10 +184,15 @@ def create_ui():  # noqa: C901
                     return f"Error: {e!s}", *update_account_list()
 
             # Connect the delete button to the delete function
-            delete_btn.click(
+            delete_event = delete_btn.click(
                 fn=delete_email_account,
                 inputs=[account_to_delete],
                 outputs=[delete_status, accounts_display, account_to_delete, delete_btn],
+            )
+            delete_event.then(
+                fn=update_ai_send_tool_config,
+                inputs=None,
+                outputs=[ai_send_allowed_account, ai_send_allowed_recipients],
             )
 
             # Initialize the account list
@@ -357,7 +436,7 @@ def create_ui():  # noqa: C901
                     )
 
             # Connect the save button to the save function
-            save_btn.click(
+            save_event = save_btn.click(
                 fn=save_email_settings,
                 inputs=[
                     account_name,
@@ -399,6 +478,11 @@ def create_ui():  # noqa: C901
                     smtp_user_name,
                     smtp_password,
                 ],
+            )
+            save_event.then(
+                fn=update_ai_send_tool_config,
+                inputs=None,
+                outputs=[ai_send_allowed_account, ai_send_allowed_recipients],
             )
         # Ariadne Engine Registration
         with gr.Accordion("Ariadne Engine Registration", open=True):

@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -19,6 +20,7 @@ from mcp_email_server.emails.models import (
 )
 
 mcp = FastMCP("email")
+EMAIL_ADDRESS_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _looks_like_rfc_message_id(value: str) -> bool:
@@ -43,6 +45,32 @@ def _validate_imap_uid(email_id: str) -> str:
 def _validate_imap_uids(email_ids: list[str]) -> list[str]:
     return [_validate_imap_uid(email_id) for email_id in email_ids]
 
+
+def _normalize_email_address(address: str) -> str:
+    return address.strip().lower()
+
+
+def _is_valid_email_address(address: str) -> bool:
+    return bool(EMAIL_ADDRESS_REGEX.fullmatch(address))
+
+
+def _validate_and_normalize_recipients(recipients: list[str]) -> tuple[list[str], list[str]]:
+    normalized_recipients: list[str] = []
+    seen: set[str] = set()
+    invalid_inputs: list[str] = []
+
+    for recipient in recipients:
+        normalized = _normalize_email_address(recipient)
+        if not normalized or not _is_valid_email_address(normalized):
+            invalid_inputs.append(recipient)
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_recipients.append(normalized)
+
+    return normalized_recipients, invalid_inputs
+
 @mcp.resource("email://{account_name}")
 async def get_account(account_name: str) -> EmailSettings | ProviderSettings | None:
     settings = get_settings()
@@ -61,6 +89,63 @@ async def add_email_account(email: EmailSettings) -> str:
     settings.add_email(email)
     settings.store()
     return f"Successfully added email account '{email.account_name}'"
+
+
+@mcp.tool(description="Retrieve the pre-approved recipient emails for the restricted email sending tool.")
+async def get_allowed_recipients() -> dict[str, Any]:
+    settings = get_settings()
+    recipients = settings.ai_sends_email_tool.allowed_recipients
+    if not recipients:
+        return {"allowed_recipients": [], "error": "No allowed recipients configured."}
+    return {"allowed_recipients": recipients, "error": None}
+
+
+@mcp.tool(
+    description=(
+        "Send an email only to pre-approved recipients using the fixed configured account. "
+        "Before using this tool, call `get_allowed_recipients` to retrieve the list of approved addresses."
+    )
+)
+async def send_email_to_allowed_recipients(
+    to: Annotated[list[str], Field(description="List of recipient email addresses. Can be a subset of the allowed recipients.")],
+    subject: Annotated[str, Field(description="Email subject.")],
+    body: Annotated[str, Field(description="Email body.")],
+) -> dict[str, Any]:
+    settings = get_settings()
+    tool_settings = settings.ai_sends_email_tool
+
+    if not tool_settings.allowed_account_name:
+        return {"success": False, "error": "No email account configured for this tool."}
+
+    if not to:
+        return {"success": False, "error": "No recipients provided."}
+
+    normalized_to, invalid_inputs = _validate_and_normalize_recipients(to)
+    allowed_set = set(tool_settings.allowed_recipients)
+    disallowed_recipients = [recipient for recipient in normalized_to if recipient not in allowed_set]
+
+    if invalid_inputs or disallowed_recipients:
+        errors: list[str] = []
+        if invalid_inputs:
+            errors.append("Invalid email address format.")
+        if disallowed_recipients:
+            errors.append("Recipient(s) not in allowed list.")
+        return {"success": False, "error": " ".join(errors)}
+
+    configured_account = settings.get_account(tool_settings.allowed_account_name)
+    if not isinstance(configured_account, EmailSettings):
+        tool_settings.allowed_account_name = None
+        tool_settings.allowed_recipients = []
+        settings.store()
+        return {"success": False, "error": "No email account configured for this tool."}
+
+    handler = dispatch_handler(tool_settings.allowed_account_name)
+    await handler.send_email(normalized_to, subject, body, None, None, False, None, None, None)
+    return {
+        "success": True,
+        "message": "Email sent successfully",
+        "sent_to": normalized_to,
+    }
 
 @mcp.tool(
     description="List email metadata (email_id, subject, sender, recipients, date) without body content. Returns email_id for use with get_emails_content."

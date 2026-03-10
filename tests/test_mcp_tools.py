@@ -7,6 +7,7 @@ from mcp_email_server.app import (
     add_email_account,
     delete_emails,
     download_attachment,
+    get_allowed_recipients,
     get_emails_content,
     get_full_email_body,
     list_available_accounts,
@@ -15,8 +16,9 @@ from mcp_email_server.app import (
     mark_email,
     move_email,
     send_email,
+    send_email_to_allowed_recipients,
 )
-from mcp_email_server.config import EmailServer, EmailSettings, ProviderSettings
+from mcp_email_server.config import AiSendsEmailToolSettings, EmailServer, EmailSettings, ProviderSettings
 from mcp_email_server.emails.models import (
     AttachmentDownloadResponse,
     EmailBodyResponse,
@@ -388,6 +390,157 @@ class TestMcpTools:
                 None,
                 None,
             )
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_recipients_empty(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(allowed_account_name="work", allowed_recipients=[])
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await get_allowed_recipients()
+
+            assert result == {"allowed_recipients": [], "error": "No allowed recipients configured."}
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_recipients_success(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+            allowed_account_name="work",
+            allowed_recipients=["allowed@example.com", "second@example.com"],
+        )
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await get_allowed_recipients()
+
+            assert result == {
+                "allowed_recipients": ["allowed@example.com", "second@example.com"],
+                "error": None,
+            }
+
+    @pytest.mark.asyncio
+    async def test_send_email_to_allowed_recipients_no_account(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(allowed_account_name=None, allowed_recipients=[])
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await send_email_to_allowed_recipients(
+                to=["allowed@example.com"],
+                subject="Test",
+                body="Body",
+            )
+
+            assert result == {"success": False, "error": "No email account configured for this tool."}
+
+    @pytest.mark.asyncio
+    async def test_send_email_to_allowed_recipients_no_recipients(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+            allowed_account_name="work",
+            allowed_recipients=["allowed@example.com"],
+        )
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await send_email_to_allowed_recipients(
+                to=[],
+                subject="Test",
+                body="Body",
+            )
+
+            assert result == {"success": False, "error": "No recipients provided."}
+
+    @pytest.mark.asyncio
+    async def test_send_email_to_allowed_recipients_invalid_and_disallowed(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+            allowed_account_name="work",
+            allowed_recipients=["allowed@example.com"],
+        )
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await send_email_to_allowed_recipients(
+                to=["invalid-email", "not-allowed@example.com"],
+                subject="Test",
+                body="Body",
+            )
+
+            assert result["success"] is False
+            assert "Invalid email address format." in result["error"]
+            assert "Recipient(s) not in allowed list." in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_send_email_to_allowed_recipients_success(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+            allowed_account_name="work",
+            allowed_recipients=["allowed@example.com"],
+        )
+        configured_account = EmailSettings(
+            account_name="work",
+            full_name="Test User",
+            email_address="test@example.com",
+            incoming=EmailServer(
+                user_name="test_user",
+                password="test_password",
+                host="imap.example.com",
+                port=993,
+                use_ssl=True,
+            ),
+            outgoing=EmailServer(
+                user_name="test_user",
+                password="test_password",
+                host="smtp.example.com",
+                port=465,
+                use_ssl=True,
+            ),
+        )
+        mock_settings.get_account.return_value = configured_account
+        mock_handler = AsyncMock()
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler):
+                result = await send_email_to_allowed_recipients(
+                    to=["ALLOWED@example.com", "allowed@example.com"],
+                    subject="Test",
+                    body="Body",
+                )
+
+                assert result == {
+                    "success": True,
+                    "message": "Email sent successfully",
+                    "sent_to": ["allowed@example.com"],
+                }
+                mock_handler.send_email.assert_called_once_with(
+                    ["allowed@example.com"],
+                    "Test",
+                    "Body",
+                    None,
+                    None,
+                    False,
+                    None,
+                    None,
+                    None,
+                )
+
+    @pytest.mark.asyncio
+    async def test_send_email_to_allowed_recipients_missing_configured_account_auto_clears(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+            allowed_account_name="missing",
+            allowed_recipients=["allowed@example.com"],
+        )
+        mock_settings.get_account.return_value = None
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await send_email_to_allowed_recipients(
+                to=["allowed@example.com"],
+                subject="Test",
+                body="Body",
+            )
+
+            assert result == {"success": False, "error": "No email account configured for this tool."}
+            assert mock_settings.ai_sends_email_tool.allowed_account_name is None
+            assert mock_settings.ai_sends_email_tool.allowed_recipients == []
+            mock_settings.store.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_list_folders(self):

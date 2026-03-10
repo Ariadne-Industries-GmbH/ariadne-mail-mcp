@@ -209,6 +209,18 @@ The server exposes MCP resources/tools for email workflows.
   - Sends an email (UTF‑8 safe subject/sender). Returns: `"Email sent successfully to <first-recipient>"`.
   - Controlled by env: disabled by default. Set `MCP_EMAIL_SERVER_ENABLE_SENDING=true` (or `1/yes/on`) to enable. When disabled, the tool raises a permission error.
 
+- Tool `get_allowed_recipients()` → object
+  - Returns restricted tool recipients: `{ "allowed_recipients": [...], "error": null }`.
+  - If none configured: `{ "allowed_recipients": [], "error": "No allowed recipients configured." }`.
+
+- Tool `send_email_to_allowed_recipients(to, subject, body)` → object
+  - Uses a fixed account configured in the UI (`AI Sends Email Tool` section).
+  - `to` must be a non-empty list and every address must be valid + included in the allowed list.
+  - Returns compact JSON:
+    - Success: `{ "success": true, "message": "Email sent successfully", "sent_to": [...] }`
+    - Errors: `{ "success": false, "error": "<reason>" }`
+  - Before using this tool, call `get_allowed_recipients` to retrieve the list of approved addresses.
+
 - Tool `list_folders(account_name)` → list[str]
   - Lists IMAP folders.
 

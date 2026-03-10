@@ -65,7 +65,7 @@ class EmailHandler(abc.ABC):
     @abc.abstractmethod
     async def mark_email(self, email_id: str, folder: str = "INBOX", mark: str = "read") -> bool:
         """Mark an email by IMAP UID (email_id) (read/unread/flagged/unflagged/answered/draft)."""
-    
+
     @abc.abstractmethod
     async def delete_emails(self, email_ids: list[str], mailbox: str = "INBOX") -> tuple[list[str], list[str]]:
         """

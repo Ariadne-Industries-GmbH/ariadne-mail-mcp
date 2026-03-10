@@ -1,6 +1,6 @@
 import email.utils
-import re
 import mimetypes
+import re
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from email.header import Header
@@ -25,6 +25,7 @@ from mcp_email_server.emails.models import (
     EmailMetadataPageResponse,
 )
 from mcp_email_server.log import logger
+
 
 def imap_decode(s: str) -> str:
     out = []
@@ -782,7 +783,7 @@ class EmailClient:
             while i < len(lines):
                 line = lines[i]
                 txt = line.decode("utf-8", "replace") if isinstance(line, (bytes, bytearray)) else str(line)
-                
+
                 # Pragmatische Lösung: nimm einfach das letzte Feld (Mailbox-Name)
                 # Format ist typischerweise: (<flags>) "<delim>" <name>
                 parts = txt.strip().split(" ", 2)
@@ -790,9 +791,9 @@ class EmailClient:
                     # Manche Server schicken zusätzliche Statuszeilen – überspringen
                     i += 1
                     continue
-                
+
                 name_field = parts[2].strip()
-                
+
                 # Literal? -> {N} und der eigentliche Name steht in der *nächsten* Zeile
                 lit = re.fullmatch(r'\{(\d+)\}\r?$', name_field)
                 if lit:
@@ -973,7 +974,7 @@ class ClassicEmailHandler(EmailHandler):
             return ""
 
     async def mark_email(self, email_id: str, folder: str = "INBOX", mark: str = "read") -> bool:
-        """Mark an email with common IMAP flags.
+        r"""Mark an email with common IMAP flags.
 
         mark options:
         - read/unread -> \Seen add/remove
@@ -1021,7 +1022,7 @@ class ClassicEmailHandler(EmailHandler):
             in_reply_to,
             references,
         )
-        
+
         # Save to Sent folder if enabled
         if self.save_to_sent and msg:
             await self.outgoing_client.append_to_sent(

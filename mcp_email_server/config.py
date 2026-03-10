@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import datetime
 import os
+import re
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import tomli_w
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -20,6 +21,7 @@ from mcp_email_server.log import logger
 DEFAULT_CONFIG_PATH = "./mcp_email_server/config.toml"
 
 CONFIG_PATH = Path(os.getenv("MCP_EMAIL_SERVER_CONFIG_PATH", DEFAULT_CONFIG_PATH)).expanduser().resolve()
+EMAIL_ADDRESS_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class EmailServer(BaseModel):
@@ -211,6 +213,53 @@ class ProviderSettings(AccountAttributes):
         return self.model_copy(update={"api_key": "********"})
 
 
+class AiSendsEmailToolSettings(BaseModel):
+    model_config = ConfigDict(validate_assignment=True)
+    allowed_account_name: str | None = None
+    allowed_recipients: list[str] = Field(default_factory=list)
+
+    @field_validator("allowed_account_name", mode="before")
+    @classmethod
+    def normalize_account_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("allowed_recipients", mode="before")
+    @classmethod
+    def normalize_recipients(cls, value: list[str] | None) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise TypeError("allowed_recipients must be a list of email addresses")
+
+        normalized_recipients: list[str] = []
+        seen: set[str] = set()
+        invalid: list[str] = []
+        for recipient in value:
+            if not isinstance(recipient, str):
+                invalid.append(str(recipient))
+                continue
+
+            normalized = recipient.strip().lower()
+            if not normalized:
+                continue
+            if not EMAIL_ADDRESS_REGEX.fullmatch(normalized):
+                invalid.append(recipient)
+                continue
+            if normalized in seen:
+                continue
+
+            seen.add(normalized)
+            normalized_recipients.append(normalized)
+
+        if invalid:
+            raise ValueError("Invalid email address format.")
+
+        return normalized_recipients
+
+
 def _parse_bool_env(value: str | None, default: bool = False) -> bool:
     """Parse boolean value from environment variable."""
     if value is None:
@@ -221,6 +270,7 @@ def _parse_bool_env(value: str | None, default: bool = False) -> bool:
 class Settings(BaseSettings):
     emails: list[EmailSettings] = []
     providers: list[ProviderSettings] = []
+    ai_sends_email_tool: AiSendsEmailToolSettings = Field(default_factory=AiSendsEmailToolSettings)
     db_location: str = CONFIG_PATH.with_name("db.sqlite3").as_posix()
     enable_attachment_download: bool = False
 
@@ -266,6 +316,9 @@ class Settings(BaseSettings):
     def delete_email(self, account_name: str) -> None:
         """Use re-assigned for validation to work."""
         self.emails = [email for email in self.emails if email.account_name != account_name]
+        if self.ai_sends_email_tool.allowed_account_name == account_name:
+            self.ai_sends_email_tool.allowed_account_name = None
+            self.ai_sends_email_tool.allowed_recipients = []
 
     def delete_provider(self, account_name: str) -> None:
         """Use re-assigned for validation to work."""

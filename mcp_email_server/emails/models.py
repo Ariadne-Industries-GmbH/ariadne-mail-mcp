@@ -3,6 +3,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+
 class EmailMetadata(BaseModel):
     """Email metadata"""
 
