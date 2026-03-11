@@ -97,3 +97,21 @@ def test_delete_email_clears_ai_send_tool_config():
     assert settings.emails == []
     assert settings.ai_sends_email_tool.allowed_account_name is None
     assert settings.ai_sends_email_tool.allowed_recipients == []
+
+
+def test_secret_fields_are_not_exposed_in_repr():
+    email_server = EmailServer(
+        user_name="test",
+        password="super-secret",
+        host="imap.gmail.com",
+        port=993,
+        ssl=True,
+    )
+    provider = ProviderSettings(
+        account_name="provider_test",
+        provider_name="test",
+        api_key="provider-secret",
+    )
+
+    assert "super-secret" not in repr(email_server)
+    assert "provider-secret" not in repr(provider)

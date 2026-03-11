@@ -69,10 +69,35 @@ class TestDispatcher:
 
     def test_dispatch_handler_with_nonexistent_account(self):
         """Test dispatch_handler with non-existent account (should raise ValueError)."""
+        configured_email = EmailSettings(
+            account_name="account1",
+            full_name="Test User",
+            email_address="test@example.com",
+            incoming=EmailServer(
+                user_name="test_user",
+                password="test_password",
+                host="imap.example.com",
+                port=993,
+                use_ssl=True,
+            ),
+            outgoing=EmailServer(
+                user_name="test_user",
+                password="test_password",
+                host="smtp.example.com",
+                port=465,
+                use_ssl=True,
+            ),
+        )
+        configured_provider = ProviderSettings(
+            account_name="account2",
+            provider_name="test",
+            api_key="test_api_key",
+        )
+
         # Mock the get_settings function to return None for get_account
         mock_settings = MagicMock()
         mock_settings.get_account.return_value = None
-        mock_settings.get_accounts.return_value = ["account1", "account2"]
+        mock_settings.get_accounts.return_value = [configured_email, configured_provider]
 
         with patch("mcp_email_server.emails.dispatcher.get_settings", return_value=mock_settings):
             # Call the function and expect ValueError
@@ -80,7 +105,12 @@ class TestDispatcher:
                 dispatch_handler("nonexistent_account")
 
             # Verify the error message
-            assert "Account nonexistent_account not found" in str(excinfo.value)
+            error_message = str(excinfo.value)
+            assert "Account nonexistent_account not found" in error_message
+            assert "account1" in error_message
+            assert "account2" in error_message
+            assert "test_password" not in error_message
+            assert "test_api_key" not in error_message
 
             # Verify get_account was called correctly
             mock_settings.get_account.assert_called_once_with("nonexistent_account")

@@ -21,4 +21,5 @@ def dispatch_handler(account_name: str) -> EmailHandler:
     if isinstance(account, EmailSettings):
         return ClassicEmailHandler(account)
 
-    raise ValueError(f"Account {account_name} not found, available accounts: {settings.get_accounts()}")
+    available_accounts = [configured_account.account_name for configured_account in settings.get_accounts()]
+    raise ValueError(f"Account {account_name} not found, available accounts: {available_accounts}")
