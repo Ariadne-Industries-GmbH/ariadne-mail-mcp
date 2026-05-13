@@ -564,7 +564,7 @@ class TestMcpTools:
         """Test move_email MCP tool."""
         # Mock the dispatch_handler function
         mock_handler = AsyncMock()
-        mock_handler.move_email.return_value = True
+        mock_handler.move_email.return_value = (True, "67890", None)
 
         with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler):
             # Call the function
@@ -576,7 +576,10 @@ class TestMcpTools:
             )
 
             # Verify the result
-            assert "Email moved successfully!" in result
+            assert result["success"] is True
+            assert result["new_email_id"] == "67890"
+            assert result["previous_email_id"] == "12345"
+            assert result["destination_folder"] == "ARCHIVE"
 
             # Verify move_email was called correctly
             mock_handler.move_email.assert_called_once_with(

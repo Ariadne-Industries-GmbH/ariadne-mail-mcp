@@ -198,12 +198,15 @@ class InteractiveEmailCLI:
             
         print(f"\nMoving email {email_id} from {source_folder} to {destination_folder}...")
         
-        success = await self.client.move_email(email_id, source_folder, destination_folder)
-        
+        success, new_uid, error = await self.client.move_email(email_id, source_folder, destination_folder)
+
         if success:
-            print("Email moved successfully!")
+            if new_uid:
+                print(f"Email moved successfully! New UID in destination: {new_uid}")
+            else:
+                print("Email moved successfully! (Server did not report a new UID.)")
         else:
-            print("Error: Failed to move email")
+            print(f"Error: Failed to move email: {error or 'unknown error'}")
     
     async def delete_email(self, email_id: str, folder: str = "INBOX") -> None:
         """Delete an email."""

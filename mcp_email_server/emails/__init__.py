@@ -53,8 +53,16 @@ class EmailHandler(abc.ABC):
         """List all folders in the mail account."""
 
     @abc.abstractmethod
-    async def move_email(self, email_id: str, source_folder: str, destination_folder: str) -> bool:
-        """Move an email by IMAP UID (email_id) from one folder to another."""
+    async def move_email(
+        self, email_id: str, source_folder: str, destination_folder: str
+    ) -> tuple[bool, str | None, str | None]:
+        """Move an email by IMAP UID (email_id) from one folder to another.
+
+        Returns (success, new_uid_in_destination, error_message). The new UID
+        is parsed from the server's COPYUID response when UIDPLUS is supported;
+        callers must use it to address the email in the destination folder,
+        because the source UID does not survive a move.
+        """
 
 
 

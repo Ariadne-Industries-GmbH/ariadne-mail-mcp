@@ -148,7 +148,7 @@ class TestEmailClient:
         mock_imap._client_task.set_result(None)
         mock_imap.wait_hello_from_server = AsyncMock()
         mock_imap.login = AsyncMock()
-        mock_imap.select = AsyncMock()
+        mock_imap.select = AsyncMock(return_value=("OK", [b"1 EXISTS"]))
         mock_imap.search = AsyncMock(return_value=(None, [b"1 2 3"]))
         mock_imap.uid_search = AsyncMock(return_value=(None, [b"1 2 3"]))
         mock_imap.fetch = AsyncMock(return_value=(None, [b"HEADER", bytearray(b"EMAIL CONTENT")]))
@@ -191,7 +191,7 @@ This is the email body."""
                 mock_imap.login.assert_called_once_with(
                     email_client.email_server.user_name, email_client.email_server.password
                 )
-                mock_imap.select.assert_called_once_with("INBOX")
+                mock_imap.select.assert_called_once_with('"INBOX"')
                 mock_imap.uid_search.assert_called_once_with("ALL")
                 assert mock_imap.uid.call_count == 3
                 mock_imap.logout.assert_called_once()
@@ -223,7 +223,7 @@ This is the email body."""
         mock_imap._client_task.set_result(None)
         mock_imap.wait_hello_from_server = AsyncMock()
         mock_imap.login = AsyncMock()
-        mock_imap.select = AsyncMock()
+        mock_imap.select = AsyncMock(return_value=("OK", [b"5 EXISTS"]))
         mock_imap.search = AsyncMock(return_value=(None, [b"1 2 3 4 5"]))
         mock_imap.uid_search = AsyncMock(return_value=(None, [b"1 2 3 4 5"]))
         mock_imap.logout = AsyncMock()
@@ -238,7 +238,7 @@ This is the email body."""
             mock_imap.login.assert_called_once_with(
                 email_client.email_server.user_name, email_client.email_server.password
             )
-            mock_imap.select.assert_called_once_with("INBOX")
+            mock_imap.select.assert_called_once_with('"INBOX"')
             mock_imap.uid_search.assert_called_once_with("ALL")
             mock_imap.logout.assert_called_once()
 

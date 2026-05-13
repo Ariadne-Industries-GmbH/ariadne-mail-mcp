@@ -323,17 +323,45 @@ async def list_folders(account_name: Annotated[str, Field(description="The name 
     handler = dispatch_handler(account_name)
     return await handler.list_folders()
 
-@mcp.tool(description="Move an email (by IMAP UID / email_id) from one folder to another.")
+@mcp.tool(
+    description=(
+        "Move an email (by IMAP UID / email_id) from one folder to another. "
+        "After a successful move, the email has a NEW UID in the destination folder; "
+        "use the returned `new_email_id` for any further operations there. The old "
+        "email_id is no longer valid in either folder."
+    )
+)
 async def move_email(
     account_name: Annotated[str, Field(description="The name of the email account.")],
     email_id: Annotated[str, Field(description="The IMAP UID (email_id) of the email to move.")],
     source_folder: Annotated[str, Field(description="The source folder of the email.")],
     destination_folder: Annotated[str, Field(description="The destination folder of the email.")],
-) -> str:
+) -> dict[str, Any]:
     email_id = _validate_imap_uid(email_id)
     handler = dispatch_handler(account_name)
-    success = await handler.move_email(email_id, source_folder, destination_folder)
-    return "Email moved successfully!" if success else "Failed to move email"
+    success, new_uid, error = await handler.move_email(email_id, source_folder, destination_folder)
+    if success:
+        return {
+            "success": True,
+            "message": "Email moved successfully.",
+            "source_folder": source_folder,
+            "destination_folder": destination_folder,
+            "previous_email_id": email_id,
+            "new_email_id": new_uid,
+            "note": (
+                None
+                if new_uid
+                else "Server did not return a COPYUID (no UIDPLUS support); look up the new UID via list_emails_metadata in the destination folder."
+            ),
+        }
+    return {
+        "success": False,
+        "message": "Failed to move email. Source email left untouched.",
+        "source_folder": source_folder,
+        "destination_folder": destination_folder,
+        "previous_email_id": email_id,
+        "error": error or "Unknown error.",
+    }
 
 
 @mcp.tool(
