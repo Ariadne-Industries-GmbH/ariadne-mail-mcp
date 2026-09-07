@@ -1,6 +1,6 @@
 import abc
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mcp_email_server.emails.models import (
@@ -8,7 +8,6 @@ if TYPE_CHECKING:
         EmailContentBatchResponse,
         EmailMetadataPageResponse,
     )
-
 
 class EmailHandler(abc.ABC):
     @abc.abstractmethod
@@ -48,6 +47,32 @@ class EmailHandler(abc.ABC):
         """
         Send email
         """
+
+    @abc.abstractmethod
+    async def list_folders(self) -> list[str]:
+        """List all folders in the mail account."""
+
+    @abc.abstractmethod
+    async def move_email(
+        self, email_id: str, source_folder: str, destination_folder: str
+    ) -> tuple[bool, str | None, str | None]:
+        """Move an email by IMAP UID (email_id) from one folder to another.
+
+        Returns (success, new_uid_in_destination, error_message). The new UID
+        is parsed from the server's COPYUID response when UIDPLUS is supported;
+        callers must use it to address the email in the destination folder,
+        because the source UID does not survive a move.
+        """
+
+
+
+    @abc.abstractmethod
+    async def get_full_email_body(self, email_id: str, folder: str = "INBOX") -> str:
+        """Fetch the full body of an email by IMAP UID (email_id)."""
+
+    @abc.abstractmethod
+    async def mark_email(self, email_id: str, folder: str = "INBOX", mark: str = "read") -> bool:
+        """Mark an email by IMAP UID (email_id) (read/unread/flagged/unflagged/answered/draft)."""
 
     @abc.abstractmethod
     async def delete_emails(self, email_ids: list[str], mailbox: str = "INBOX") -> tuple[list[str], list[str]]:

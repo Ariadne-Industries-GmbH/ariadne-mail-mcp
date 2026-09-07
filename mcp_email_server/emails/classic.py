@@ -1,5 +1,6 @@
 import email.utils
 import mimetypes
+import re
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from email.header import Header
@@ -25,6 +26,108 @@ from mcp_email_server.emails.models import (
 )
 from mcp_email_server.log import logger
 
+
+def imap_encode(name: str) -> str:
+    """Encode a mailbox name to IMAP modified UTF-7 (RFC 3501 §5.1.3)."""
+    import base64
+
+    out: list[str] = []
+    buf: list[str] = []
+
+    def flush_buf() -> None:
+        if not buf:
+            return
+        raw = "".join(buf).encode("utf-16-be")
+        b64 = base64.b64encode(raw).decode("ascii").rstrip("=").replace("/", ",")
+        out.append("&" + b64 + "-")
+        buf.clear()
+
+    for c in name:
+        code = ord(c)
+        if c == "&":
+            flush_buf()
+            out.append("&-")
+        elif 0x20 <= code <= 0x7E:
+            flush_buf()
+            out.append(c)
+        else:
+            buf.append(c)
+    flush_buf()
+    return "".join(out)
+
+
+def _quote_mailbox(name: str) -> str:
+    """Encode + quote a mailbox name so it survives IMAP's space-delimited args.
+
+    aioimaplib does not quote arguments itself, so mailbox names containing
+    spaces or special characters MUST be quoted by us, or the server will
+    interpret the trailing word(s) as separate command arguments. That silent
+    failure is the root cause behind move/select going wrong on folders like
+    "INBOX.Newsletter.sonstige Newsletter".
+    """
+    encoded = imap_encode(name)
+    escaped = encoded.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _is_ok(result: Any) -> bool:
+    """aioimaplib Response.result is a string like 'OK'/'NO'/'BAD'."""
+    if result is None:
+        return False
+    if hasattr(result, "result"):
+        return str(result.result).upper() == "OK"
+    if isinstance(result, tuple):
+        return str(result[0]).upper() == "OK"
+    return str(result).upper() == "OK"
+
+
+def imap_decode(s: str) -> str:
+    out = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == '&':
+            j = s.find('-', i)
+            if j == -1:
+                # Ungültig -> rohes '&'
+                out.append('&')
+                i += 1
+                continue
+            if j == i + 1:
+                # "&-" steht für ein einzelnes '&'
+                out.append('&')
+                i = j + 1
+                continue
+            b64 = s[i+1:j]
+            # IMAP nutzt eine modifizierte Base64-Variante: ',' statt '/'
+            b64 = b64.replace(',', '/')
+            # Pad Base64
+            pad = '=' * ((4 - (len(b64) % 4)) % 4)
+            try:
+                import base64
+                raw = base64.b64decode(b64 + pad)
+                # Big-endian UTF-16
+                out.append(raw.decode('utf-16-be'))
+            except Exception:
+                # Fallback: roher Text
+                out.append(s[i:j+1])
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+_LIST_RE = re.compile(
+    r'^\* +LIST +\((?P<flags>[^)]*)\)\s+(?P<delim>NIL|".*?"|[^ ]+)\s+(?P<name>.*)$',
+    re.IGNORECASE,
+)
+
+def _unquote(s: str) -> str:
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] == '"':
+        s = s[1:-1]
+        s = s.replace(r'\"', '"')
+    return s
 
 class EmailClient:
     def __init__(self, email_server: EmailServer, sender: str | None = None):
@@ -167,7 +270,9 @@ class EmailClient:
 
             # Login and select inbox
             await imap.login(self.email_server.user_name, self.email_server.password)
-            await imap.select(mailbox)
+            select_result = await imap.select(_quote_mailbox(mailbox))
+            if not _is_ok(select_result):
+                raise ValueError(f"Cannot select mailbox {mailbox!r}: {select_result}")
             search_criteria = self._build_search_criteria(
                 before, since, subject, from_address=from_address, to_address=to_address
             )
@@ -206,7 +311,9 @@ class EmailClient:
                 await imap.id(name="mcp-email-server", version="1.0.0")
             except Exception as e:
                 logger.warning(f"IMAP ID command failed: {e!s}")
-            await imap.select(mailbox)
+            select_result = await imap.select(_quote_mailbox(mailbox))
+            if not _is_ok(select_result):
+                raise ValueError(f"Cannot select mailbox {mailbox!r}: {select_result}")
 
             search_criteria = self._build_search_criteria(
                 before, since, subject, from_address=from_address, to_address=to_address
@@ -267,6 +374,7 @@ class EmailClient:
                             subject = email_message.get("Subject", "")
                             sender = email_message.get("From", "")
                             date_str = email_message.get("Date", "")
+                            message_id = email_message.get("Message-ID")
 
                             # Extract recipients
                             to_addresses = []
@@ -293,6 +401,7 @@ class EmailClient:
                             # We'll mark it as unknown for now
                             metadata = {
                                 "email_id": email_id_str,
+                                "message_id": message_id,
                                 "subject": subject,
                                 "from": sender,
                                 "to": to_addresses,
@@ -314,31 +423,50 @@ class EmailClient:
             except Exception as e:
                 logger.info(f"Error during logout: {e}")
 
+    _FETCH_MARKER_RE = re.compile(rb"^\d+\s+FETCH\s*\(", re.IGNORECASE)
+
+    def _has_fetch_marker(self, data: list) -> bool:
+        """True if the server actually returned a `<seq> FETCH (...)` response.
+
+        When a UID does not exist in the selected folder, aioimaplib still
+        returns the tagged status text (`Completed (0.000 sec)`) as the last
+        line. Without this check we would mistake that status line for the
+        email body — that's how messages came back with `subject=""`,
+        `sender=""`, `body="Completed (0.000 sec)"` after a move.
+        """
+        for item in data:
+            if isinstance(item, (bytes, bytearray)) and self._FETCH_MARKER_RE.match(bytes(item)):
+                return True
+        return False
+
     def _check_email_content(self, data: list) -> bool:
         """Check if the fetched data contains actual email content."""
+        if not self._has_fetch_marker(data):
+            return False
         for item in data:
-            if isinstance(item, bytes) and b"FETCH (" in item and b"RFC822" not in item and b"BODY" not in item:
-                # This is just metadata, not actual content
-                continue
-            elif isinstance(item, bytes | bytearray) and len(item) > 100:
-                # This looks like email content
+            if isinstance(item, bytearray) and len(item) > 0:
                 return True
         return False
 
     def _extract_raw_email(self, data: list) -> bytes | None:
-        """Extract raw email bytes from IMAP response data."""
-        # The email content is typically at index 1 as a bytearray
-        if len(data) > 1 and isinstance(data[1], bytearray):
-            return bytes(data[1])
+        """Extract raw email bytes from IMAP response data.
 
-        # Search through all items for email content
+        Only returns payload that *follows* a `<seq> FETCH (...)` marker; the
+        trailing tagged status line is never returned as email content.
+        """
+        seen_fetch = False
         for item in data:
-            if isinstance(item, bytes | bytearray) and len(item) > 100:
-                # Skip IMAP protocol responses
-                if isinstance(item, bytes) and b"FETCH" in item:
+            if isinstance(item, (bytes, bytearray)) and self._FETCH_MARKER_RE.match(bytes(item)):
+                seen_fetch = True
+                continue
+            if not seen_fetch:
+                continue
+            if isinstance(item, bytearray) and len(item) > 0:
+                return bytes(item)
+            if isinstance(item, bytes) and len(item) > 0:
+                if item == b")" or b"FETCH" in item:
                     continue
-                # This is likely the email content
-                return bytes(item) if isinstance(item, bytearray) else item
+                return item
         return None
 
     async def _fetch_email_with_formats(self, imap, email_id: str) -> list | None:
@@ -370,7 +498,10 @@ class EmailClient:
                 await imap.id(name="mcp-email-server", version="1.0.0")
             except Exception as e:
                 logger.warning(f"IMAP ID command failed: {e!s}")
-            await imap.select(mailbox)
+            select_result = await imap.select(_quote_mailbox(mailbox))
+            if not _is_ok(select_result):
+                logger.error(f"Cannot select mailbox {mailbox!r}: {select_result}")
+                return None
 
             # Fetch the specific email by UID
             data = await self._fetch_email_with_formats(imap, email_id)
@@ -415,7 +546,9 @@ class EmailClient:
                 await imap.id(name="mcp-email-server", version="1.0.0")
             except Exception as e:
                 logger.warning(f"IMAP ID command failed: {e!s}")
-            await imap.select("INBOX")
+            select_result = await imap.select(_quote_mailbox("INBOX"))
+            if not _is_ok(select_result):
+                raise ValueError(f"Cannot select INBOX: {select_result}")
 
             data = await self._fetch_email_with_formats(imap, email_id)
             if not data:
@@ -630,31 +763,29 @@ class EmailClient:
             for folder in sent_folder_candidates:
                 try:
                     logger.debug(f"Trying Sent folder: '{folder}'")
+                    quoted_folder = _quote_mailbox(folder)
                     # Try to select the folder to verify it exists
-                    result = await imap.select(folder)
+                    result = await imap.select(quoted_folder)
                     logger.debug(f"Select result for '{folder}': {result}")
 
-                    # aioimaplib returns (status, data) where status is a string like 'OK' or 'NO'
-                    status = result[0] if isinstance(result, tuple) else result
-                    if str(status).upper() == "OK":
+                    if _is_ok(result):
                         # Folder exists, append the message
                         msg_bytes = msg.as_bytes()
                         logger.debug(f"Appending message to '{folder}'")
                         # aioimaplib.append signature: (message_bytes, mailbox, flags, date)
                         append_result = await imap.append(
                             msg_bytes,
-                            mailbox=folder,
+                            mailbox=quoted_folder,
                             flags=r"(\Seen)",
                         )
                         logger.debug(f"Append result: {append_result}")
-                        append_status = append_result[0] if isinstance(append_result, tuple) else append_result
-                        if str(append_status).upper() == "OK":
+                        if _is_ok(append_result):
                             logger.info(f"Saved sent email to '{folder}'")
                             return True
                         else:
-                            logger.warning(f"Failed to append to '{folder}': {append_status}")
+                            logger.warning(f"Failed to append to '{folder}': {append_result}")
                     else:
-                        logger.debug(f"Folder '{folder}' select returned: {status}")
+                        logger.debug(f"Folder '{folder}' select returned: {result}")
                 except Exception as e:
                     logger.debug(f"Folder '{folder}' not available: {e}")
                     continue
@@ -681,7 +812,11 @@ class EmailClient:
             await imap._client_task
             await imap.wait_hello_from_server()
             await imap.login(self.email_server.user_name, self.email_server.password)
-            await imap.select(mailbox)
+            select_result = await imap.select(_quote_mailbox(mailbox))
+            if not _is_ok(select_result):
+                # Fail every requested deletion rather than silently no-op on
+                # the wrong mailbox.
+                return [], list(email_ids)
 
             for email_id in email_ids:
                 try:
@@ -700,6 +835,184 @@ class EmailClient:
 
         return deleted_ids, failed_ids
 
+
+    async def list_folders(self, include_noselect: bool = True) -> list[str]:
+        """Listet alle Ordner-Namen robust (Literals, Quoted, Atom, IMAP-UTF7)."""
+        imap = self.imap_class(self.email_server.host, self.email_server.port)
+        try:
+            await imap._client_task
+            await imap.wait_hello_from_server()
+            await imap.login(self.email_server.user_name, self.email_server.password)
+
+            # OPTIONAL: Spezialnutzung (RFC 6154) anfragen – Server-abhängig:
+            # Manche Server verstehen: await imap.list("", "*", "RETURN", "(SPECIAL-USE)")
+            # Sonst fallback:
+            status, data = await imap.list('""', '"*"')
+            if status != "OK" or not data:
+                return []
+            lines = data
+
+            folders: list[str] = []
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                txt = line.decode("utf-8", "replace") if isinstance(line, (bytes, bytearray)) else str(line)
+
+                # Pragmatische Lösung: nimm einfach das letzte Feld (Mailbox-Name)
+                # Format ist typischerweise: (<flags>) "<delim>" <name>
+                parts = txt.strip().split(" ", 2)
+                if len(parts) < 3:
+                    # Manche Server schicken zusätzliche Statuszeilen – überspringen
+                    i += 1
+                    continue
+
+                name_field = parts[2].strip()
+
+                # Literal? -> {N} und der eigentliche Name steht in der *nächsten* Zeile
+                lit = re.fullmatch(r'\{(\d+)\}\r?$', name_field)
+                if lit:
+                    n = int(lit.group(1))
+                    next_line = lines[i + 1] if i + 1 < len(lines) else b""
+                    if isinstance(next_line, str):
+                        next_line = next_line.encode("utf-8", "replace")
+                    raw = (next_line or b"")[:n].decode("utf-8", "replace")
+                    name = imap_decode(raw)
+                    i += 2
+                else:
+                    # quoted-string oder atom
+                    name = imap_decode(_unquote(name_field))
+                    i += 1
+
+                # Filter out NOSELECT folders if requested
+                if not include_noselect and r'\NOSELECT' in txt:
+                    continue
+
+                folders.append(name)
+
+            return folders
+
+        finally:
+            try:
+                await imap.logout()
+            except Exception as e:
+                logger.info(f"Error during logout: {e}")
+
+    async def move_email(
+        self, email_id: str, source_folder: str, destination_folder: str
+    ) -> tuple[bool, str | None, str | None]:
+        """Move an email from one folder to another using UID commands.
+
+        Returns (success, new_uid, error_message). The destination UID is
+        extracted from the server's COPYUID response (UIDPLUS, RFC 4315) when
+        available — needed because the email gets a fresh UID in the
+        destination and the source UID becomes meaningless there.
+
+        IMPORTANT: only proceeds to STORE+EXPUNGE if both SELECT and COPY
+        report OK. Earlier versions silently deleted the source even when
+        COPY failed (e.g. destination folder did not exist, or its name
+        contained spaces), causing real data loss.
+        """
+        imap = self.imap_class(self.email_server.host, self.email_server.port)
+        try:
+            await imap._client_task
+            await imap.wait_hello_from_server()
+            await imap.login(self.email_server.user_name, self.email_server.password)
+
+            select_result = await imap.select(_quote_mailbox(source_folder))
+            if not _is_ok(select_result):
+                msg = f"Source folder {source_folder!r} could not be selected: {select_result}"
+                logger.error(msg)
+                return False, None, msg
+
+            copy_result = await imap.uid("COPY", email_id, _quote_mailbox(destination_folder))
+            if not _is_ok(copy_result):
+                msg = (
+                    f"COPY to {destination_folder!r} failed: {copy_result}. "
+                    "Source email left intact."
+                )
+                logger.error(msg)
+                return False, None, msg
+
+            new_uid = self._extract_copyuid(copy_result, email_id)
+
+            # Only now is it safe to delete the source copy.
+            store_result = await imap.uid("STORE", email_id, "+FLAGS", "(\\Deleted)")
+            if not _is_ok(store_result):
+                msg = (
+                    f"STORE \\Deleted on source UID {email_id} failed: {store_result}. "
+                    f"A copy now exists in {destination_folder!r} (UID {new_uid or 'unknown'}) "
+                    "but the source was not removed."
+                )
+                logger.error(msg)
+                return False, new_uid, msg
+
+            await imap.expunge()
+            return True, new_uid, None
+        except Exception as e:
+            logger.error(f"Error moving email: {e!s}")
+            return False, None, str(e)
+        finally:
+            try:
+                await imap.logout()
+            except Exception as e:
+                logger.info(f"Error during logout: {e}")
+
+    @staticmethod
+    def _extract_copyuid(copy_result: Any, source_uid: str) -> str | None:
+        """Pull the new destination UID out of a COPYUID response (UIDPLUS).
+
+        Server replies look like:
+          A123 OK [COPYUID <uidvalidity> <src-uid-set> <dst-uid-set>] Completed
+        We only ever copy a single UID, so the destination set is a single UID.
+        Returns None if the server does not support UIDPLUS or the response
+        cannot be parsed.
+        """
+        candidates: list[bytes | str] = []
+        lines = getattr(copy_result, "lines", None)
+        if lines:
+            candidates.extend(lines)
+        if isinstance(copy_result, tuple) and len(copy_result) > 1:
+            payload = copy_result[1]
+            if isinstance(payload, (list, tuple)):
+                candidates.extend(payload)
+            else:
+                candidates.append(payload)
+
+        for line in candidates:
+            text = line.decode("utf-8", "replace") if isinstance(line, (bytes, bytearray)) else str(line)
+            match = re.search(r"COPYUID\s+\d+\s+(\S+)\s+(\S+)", text, re.IGNORECASE)
+            if match:
+                dst_set = match.group(2).rstrip("]")
+                # Single-UID copy → just take the first token of the set.
+                first = dst_set.split(",", 1)[0].split(":", 1)[0]
+                if first.isdigit():
+                    return first
+        return None
+
+
+
+    async def set_flag(self, email_id: str, folder: str, flag: str, add: bool) -> bool:
+        """Add or remove an IMAP flag on a message using UID commands."""
+        imap = self.imap_class(self.email_server.host, self.email_server.port)
+        try:
+            await imap._client_task
+            await imap.wait_hello_from_server()
+            await imap.login(self.email_server.user_name, self.email_server.password)
+            select_result = await imap.select(_quote_mailbox(folder))
+            if not _is_ok(select_result):
+                logger.error(f"Cannot select folder {folder!r}: {select_result}")
+                return False
+            try:
+                await imap.uid("STORE", email_id, "+FLAGS" if add else "-FLAGS", flag)
+                return True
+            except Exception as e:
+                logger.error(f"Error setting flag {flag} (add={add}) on {email_id}: {e!s}")
+                return False
+        finally:
+            try:
+                await imap.logout()
+            except Exception as e:
+                logger.info(f"Error during logout: {e}")
 
 class ClassicEmailHandler(EmailHandler):
     def __init__(self, email_settings: EmailSettings):
@@ -776,6 +1089,59 @@ class ClassicEmailHandler(EmailHandler):
             failed_ids=failed_ids,
         )
 
+    async def list_folders(self) -> list[str]:
+        """List all folders in the mail account."""
+        return await self.incoming_client.list_folders()
+
+    async def move_email(
+        self, email_id: str, source_folder: str, destination_folder: str
+    ) -> tuple[bool, str | None, str | None]:
+        """Move an email from one folder to another.
+
+        Returns (success, new_uid_in_destination, error_message).
+        """
+        return await self.incoming_client.move_email(email_id, source_folder, destination_folder)
+
+
+
+
+    async def get_full_email_body(self, email_id: str, folder: str = "INBOX") -> str:
+        """Convenience wrapper to fetch only the body by IMAP UID (email_id)."""
+        try:
+            email_data = await self.incoming_client.get_email_body_by_id(email_id, folder)
+            if not email_data:
+                logger.error(f"Could not fetch email body for UID: {email_id}")
+                return ""
+            return email_data.get("body", "")
+        except Exception as e:
+            logger.error(f"Error fetching full email body for UID {email_id}: {e!s}")
+            return ""
+
+    async def mark_email(self, email_id: str, folder: str = "INBOX", mark: str = "read") -> bool:
+        r"""Mark an email with common IMAP flags.
+
+        mark options:
+        - read/unread -> \Seen add/remove
+        - flagged/unflagged -> \Flagged add/remove
+        - answered -> \Answered add
+        - draft -> \Draft add
+        """
+        mapping = {
+            "read": ("\\Seen", True),
+            "unread": ("\\Seen", False),
+            "flagged": ("\\Flagged", True),
+            "unflagged": ("\\Flagged", False),
+            "answered": ("\\Answered", True),
+            "unanswered": ("\\Answered", False),
+            "draft": ("\\Draft", True),
+        }
+        flag, add = mapping.get(mark, ("\\Seen", True))
+        return await self.incoming_client.set_flag(email_id, folder, f"({flag})", add)
+
+    async def delete_emails(self, email_ids: list[str], mailbox: str = "INBOX") -> tuple[list[str], list[str]]:
+        """Delete emails by their IDs. Returns (deleted_ids, failed_ids)."""
+        return await self.incoming_client.delete_emails(email_ids, mailbox)
+
     async def send_email(
         self,
         recipients: list[str],
@@ -788,8 +1154,17 @@ class ClassicEmailHandler(EmailHandler):
         in_reply_to: str | None = None,
         references: str | None = None,
     ) -> None:
+        """Send an email."""
         msg = await self.outgoing_client.send_email(
-            recipients, subject, body, cc, bcc, html, attachments, in_reply_to, references
+            recipients,
+            subject,
+            body,
+            cc,
+            bcc,
+            html,
+            attachments,
+            in_reply_to,
+            references,
         )
 
         # Save to Sent folder if enabled
@@ -800,22 +1175,16 @@ class ClassicEmailHandler(EmailHandler):
                 self.sent_folder_name,
             )
 
-    async def delete_emails(self, email_ids: list[str], mailbox: str = "INBOX") -> tuple[list[str], list[str]]:
-        """Delete emails by their UIDs. Returns (deleted_ids, failed_ids)."""
-        return await self.incoming_client.delete_emails(email_ids, mailbox)
-
     async def download_attachment(
         self,
         email_id: str,
         attachment_name: str,
         save_path: str,
-    ) -> AttachmentDownloadResponse:
+    ) -> "AttachmentDownloadResponse":
         """Download an email attachment and save it to the specified path."""
-        result = await self.incoming_client.download_attachment(email_id, attachment_name, save_path)
-        return AttachmentDownloadResponse(
-            email_id=result["email_id"],
-            attachment_name=result["attachment_name"],
-            mime_type=result["mime_type"],
-            size=result["size"],
-            saved_path=result["saved_path"],
+        result = await self.incoming_client.download_attachment(
+            email_id,
+            attachment_name,
+            save_path,
         )
+        return AttachmentDownloadResponse(**result)

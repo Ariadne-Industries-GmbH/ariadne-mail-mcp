@@ -189,6 +189,74 @@ To install Email Server for Claude Desktop automatically via [Smithery](https://
 npx -y @smithery/cli install @ai-zerolab/mcp-email-server --client claude
 ```
 
+## MCP Tools
+
+The server exposes MCP resources/tools for email workflows.
+
+- Resource `email://{account_name}`
+  - Returns masked account configuration for the given account.
+
+- Tool `list_available_accounts()` → list of accounts
+  - Returns masked attributes for configured email/provider accounts.
+
+- Tool `add_email_account(email: EmailSettings)` → string
+  - Adds an account and persists to TOML. Returns a success message.
+
+- Tool `page_email(account_name, page=1, page_size=10, before?, since?, subject?, body?, text?, from_address?, to_address?, order=\"desc\")` → EmailPageResponse
+  - Paginates INBOX with filters. Response: `{ page, page_size, before, since, subject, body, text, total, emails[] }` where `emails[]` are previews (truncated bodies).
+
+- Tool `send_email(account_name, recipients, subject, body, cc?, bcc?)` → string
+  - Sends an email (UTF‑8 safe subject/sender). Returns: `"Email sent successfully to <first-recipient>"`.
+  - Controlled by env: disabled by default. Set `MCP_EMAIL_SERVER_ENABLE_SENDING=true` (or `1/yes/on`) to enable. When disabled, the tool raises a permission error.
+
+- Tool `get_allowed_recipients()` → object
+  - Returns restricted tool recipients: `{ "allowed_recipients": [...], "error": null }`.
+  - If none configured: `{ "allowed_recipients": [], "error": "No allowed recipients configured." }`.
+
+- Tool `send_email_to_allowed_recipients(to, subject, body)` → object
+  - Uses a fixed account configured in the UI (`AI Sends Email Tool` section).
+  - `to` must be a non-empty list and every address must be valid + included in the allowed list.
+  - Returns compact JSON:
+    - Success: `{ "success": true, "message": "Email sent successfully", "sent_to": [...] }`
+    - Errors: `{ "success": false, "error": "<reason>" }`
+  - Before using this tool, call `get_allowed_recipients` to retrieve the list of approved addresses.
+
+- Tool `list_folders(account_name)` → list[str]
+  - Lists IMAP folders.
+
+- Tool `move_email(account_name, email_id, source_folder, destination_folder)` → string
+  - `email_id` must be the IMAP UID from `list_emails_metadata` (not the RFC `message_id` header).
+  - Copies to destination, flags deleted in source, expunges.
+
+- Tool `delete_emails(account_name, email_ids, mailbox=\"INBOX\")` → string
+  - `email_ids` are IMAP UIDs from `list_emails_metadata`.
+  - Flags deleted and expunges.
+
+- Tool `get_full_email_body(account_name, email_id, folder=\"INBOX\")` → str
+  - Convenience wrapper for a single message body lookup by IMAP UID (`email_id`).
+  - Prefer `get_emails_content` when you also need metadata or attachments.
+
+- Tool `mark_email(account_name, email_id, folder=\"INBOX\", mark)` → bool
+  - `email_id` must be the IMAP UID from `list_emails_metadata`.
+  - Marks message using IMAP flags. `mark` in `{ "read", "unread", "flagged", "unflagged", "answered", "draft" }`.
+
+### Provider Accounts (Not Supported Yet)
+
+The config schema includes `ProviderSettings` for future API-based providers (e.g., Gmail/Outlook). These are currently not supported by this server — attempting to use a provider account results in a clear error. For provider-backed workflows, use another MCP server that implements provider handlers.
+
+Example invocation (arguments shape) for `page_email`:
+
+```json
+{
+  "account_name": "work",
+  "page": 1,
+  "page_size": 10,
+  "since": "2024-01-01T00:00:00Z",
+  "subject": "invoice",
+  "order": "desc"
+}
+```
+
 ## Usage
 
 ### Replying to Emails
@@ -217,6 +285,8 @@ await send_email(
 
 The `in_reply_to` parameter sets the `In-Reply-To` header, and `references` sets the `References` header. Both are used by email clients to thread conversations properly.
 
+Important: `message_id` (RFC header used for threading) is different from `email_id` (IMAP UID used by `get_emails_content`, `get_full_email_body`, `move_email`, `mark_email`, and `delete_emails`).
+
 ## Development
 
 This project is managed using [uv](https://github.com/ai-zerolab/uv).
@@ -233,3 +303,107 @@ Use `uv run mcp-email-server` for local development.
 - Create a new tag in the form `*.*.*`.
 
 For more details, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/cicd/#how-to-trigger-a-release).
+
+## Build Binary
+
+```bash
+pyi-makespec --onefile --name mcp_email_server_bin main.py --collect-data gradio --collect-data gradio_client --collect-data safehttpx --hidden-import anyio --hidden-import starlette.routing
+```
+
+Adapt mcp_email_server.spec file:
+
+```
+# -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files, collect_all, collect_submodules
+
+datas = []
+binaries = []
+hiddenimports = ['anyio', 'starlette.routing']
+
+# Datenfiles der Pakete einsammeln
+datas += collect_data_files('gradio')
+datas += collect_data_files('gradio_client')
+datas += collect_data_files('safehttpx')
+
+# numpy komplett (Tuple: (datas, binaries, hiddenimports))
+d, b, h = collect_all('numpy')
+datas += d; binaries += b; hiddenimports += h
+
+# groovy komplett – wichtig wegen version.txt & Co.
+d, b, h = collect_all('groovy')
+datas += d; binaries += b; hiddenimports += h
+
+# Gradio-Submodule sicherheitshalber explizit
+hiddenimports += collect_submodules('gradio')
+
+a = Analysis(
+    ['main.py'],
+    pathex=[],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=['rthook_no_pyi.py'],   # Runtime-Hook aktivieren
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+    # WICHTIG: Gradio/Groovy als .py sammeln (nicht nur .pyc in der Zipsammlung)
+    module_collection_mode={
+        "gradio": "py",
+        "groovy": "py",
+    },
+)
+
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='mcp_email_server_bin',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
+```
+
+Run PyInstaller (recommended after recreating `.venv`):
+```bash
+uv sync --group dev
+.venv/bin/python -m PyInstaller --clean mcp_email_server.spec
+```
+
+The executable will be written to:
+
+```bash
+dist/mcp_email_server_bin
+```
+
+Alternative (if your virtualenv entrypoint scripts are valid):
+
+```bash
+.venv/bin/pyinstaller --clean mcp_email_server.spec
+```
+
+### Use the CLI (but this currently not works properly)
+
+```bash
+pyinstaller --onefile --name mcp_email_server_bin main.py --collect-data gradio --collect-data gradio_client --collect-data safehttpx --hidden-import anyio --hidden-import starlette.routing --collect-data numpy --hidden-import numpy
+```
+
+```bash
+python -m nuitka --standalone --onefile main.py
+```

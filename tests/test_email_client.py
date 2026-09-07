@@ -148,12 +148,13 @@ class TestEmailClient:
         mock_imap._client_task.set_result(None)
         mock_imap.wait_hello_from_server = AsyncMock()
         mock_imap.login = AsyncMock()
-        mock_imap.select = AsyncMock()
+        mock_imap.select = AsyncMock(return_value=("OK", [b"1 EXISTS"]))
         mock_imap.search = AsyncMock(return_value=(None, [b"1 2 3"]))
         mock_imap.uid_search = AsyncMock(return_value=(None, [b"1 2 3"]))
         mock_imap.fetch = AsyncMock(return_value=(None, [b"HEADER", bytearray(b"EMAIL CONTENT")]))
         # Create a simple email with headers for testing
-        test_email = b"""From: sender@example.com\r
+        test_email = b"""Message-ID: <msg-1@example.com>\r
+From: sender@example.com\r
 To: recipient@example.com\r
 Subject: Test Subject\r
 Date: Mon, 1 Jan 2024 00:00:00 +0000\r
@@ -184,15 +185,34 @@ This is the email body."""
                 assert len(emails) == 3
                 assert emails[0]["subject"] == "Test Subject"
                 assert emails[0]["from"] == "sender@example.com"
+                assert emails[0]["message_id"] == "<msg-1@example.com>"
 
                 # Verify IMAP methods were called correctly
                 mock_imap.login.assert_called_once_with(
                     email_client.email_server.user_name, email_client.email_server.password
                 )
-                mock_imap.select.assert_called_once_with("INBOX")
+                mock_imap.select.assert_called_once_with('"INBOX"')
                 mock_imap.uid_search.assert_called_once_with("ALL")
                 assert mock_imap.uid.call_count == 3
                 mock_imap.logout.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_list_folders_passes_required_imap_list_args(self, email_client):
+        """Test folder listing uses reference name and mailbox pattern for aioimaplib."""
+        mock_imap = AsyncMock()
+        mock_imap._client_task = asyncio.Future()
+        mock_imap._client_task.set_result(None)
+        mock_imap.wait_hello_from_server = AsyncMock()
+        mock_imap.login = AsyncMock()
+        mock_imap.list = AsyncMock(return_value=("OK", [b'(\\HasNoChildren) "/" "INBOX"']))
+        mock_imap.logout = AsyncMock()
+
+        with patch.object(email_client, "imap_class", return_value=mock_imap):
+            result = await email_client.list_folders()
+
+            assert result == ["INBOX"]
+            mock_imap.list.assert_called_once_with('""', '"*"')
+            mock_imap.logout.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_get_email_count(self, email_client):
@@ -203,7 +223,7 @@ This is the email body."""
         mock_imap._client_task.set_result(None)
         mock_imap.wait_hello_from_server = AsyncMock()
         mock_imap.login = AsyncMock()
-        mock_imap.select = AsyncMock()
+        mock_imap.select = AsyncMock(return_value=("OK", [b"5 EXISTS"]))
         mock_imap.search = AsyncMock(return_value=(None, [b"1 2 3 4 5"]))
         mock_imap.uid_search = AsyncMock(return_value=(None, [b"1 2 3 4 5"]))
         mock_imap.logout = AsyncMock()
@@ -218,7 +238,7 @@ This is the email body."""
             mock_imap.login.assert_called_once_with(
                 email_client.email_server.user_name, email_client.email_server.password
             )
-            mock_imap.select.assert_called_once_with("INBOX")
+            mock_imap.select.assert_called_once_with('"INBOX"')
             mock_imap.uid_search.assert_called_once_with("ALL")
             mock_imap.logout.assert_called_once()
 

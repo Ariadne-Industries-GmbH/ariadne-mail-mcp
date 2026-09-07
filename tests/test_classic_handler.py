@@ -346,3 +346,25 @@ class TestClassicEmailHandler:
 
             # Verify the client method was called correctly
             mock_get_body.assert_called_once_with("123", "INBOX")
+
+    @pytest.mark.asyncio
+    async def test_get_full_email_body_uses_uid_email_lookup(self, classic_handler):
+        """Test get_full_email_body uses the same UID-based lookup path as get_emails_content."""
+        mock_get_body = AsyncMock(
+            return_value={
+                "email_id": "123",
+                "message_id": "<test-message-id@example.com>",
+                "subject": "Test Subject",
+                "from": "sender@example.com",
+                "to": ["recipient@example.com"],
+                "date": datetime.now(timezone.utc),
+                "body": "Full email body",
+                "attachments": [],
+            }
+        )
+
+        with patch.object(classic_handler.incoming_client, "get_email_body_by_id", mock_get_body):
+            result = await classic_handler.get_full_email_body("123", "INBOX")
+
+            assert result == "Full email body"
+            mock_get_body.assert_called_once_with("123", "INBOX")

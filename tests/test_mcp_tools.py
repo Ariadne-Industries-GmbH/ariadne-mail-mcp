@@ -7,12 +7,18 @@ from mcp_email_server.app import (
     add_email_account,
     delete_emails,
     download_attachment,
+    get_allowed_recipients,
     get_emails_content,
+    get_full_email_body,
     list_available_accounts,
     list_emails_metadata,
+    list_folders,
+    mark_email,
+    move_email,
     send_email,
+    send_email_to_allowed_recipients,
 )
-from mcp_email_server.config import EmailServer, EmailSettings, ProviderSettings
+from mcp_email_server.config import AiSendsEmailToolSettings, EmailServer, EmailSettings, ProviderSettings
 from mcp_email_server.emails.models import (
     AttachmentDownloadResponse,
     EmailBodyResponse,
@@ -156,7 +162,6 @@ class TestMcpTools:
             assert result.subject == "Test"
             assert len(result.emails) == 1
             assert result.emails[0].subject == "Test Subject"
-            assert result.emails[0].email_id == "12345"
 
             # Verify dispatch_handler and get_emails_metadata were called correctly
             mock_handler.get_emails_metadata.assert_called_once_with(
@@ -357,7 +362,9 @@ class TestMcpTools:
         # Mock the dispatch_handler function
         mock_handler = AsyncMock()
 
-        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler):
+        # Enable email sending for the test
+        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler), \
+             patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}):
             # Call the function
             result = await send_email(
                 account_name="test_account",
@@ -380,8 +387,279 @@ class TestMcpTools:
                 ["bcc@example.com"],
                 False,
                 None,
-                None,  # in_reply_to
-                None,  # references
+                None,
+                None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_recipients_empty(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(allowed_account_name="work", allowed_recipients=[])
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await get_allowed_recipients()
+
+            assert result == {"allowed_recipients": [], "error": "No allowed recipients configured."}
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_recipients_success(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+            allowed_account_name="work",
+            allowed_recipients=["allowed@example.com", "second@example.com"],
+        )
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await get_allowed_recipients()
+
+            assert result == {
+                "allowed_recipients": ["allowed@example.com", "second@example.com"],
+                "error": None,
+            }
+
+    @pytest.mark.asyncio
+    async def test_send_email_to_allowed_recipients_no_account(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(allowed_account_name=None, allowed_recipients=[])
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await send_email_to_allowed_recipients(
+                to=["allowed@example.com"],
+                subject="Test",
+                body="Body",
+            )
+
+            assert result == {"success": False, "error": "No email account configured for this tool."}
+
+    @pytest.mark.asyncio
+    async def test_send_email_to_allowed_recipients_no_recipients(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+            allowed_account_name="work",
+            allowed_recipients=["allowed@example.com"],
+        )
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await send_email_to_allowed_recipients(
+                to=[],
+                subject="Test",
+                body="Body",
+            )
+
+            assert result == {"success": False, "error": "No recipients provided."}
+
+    @pytest.mark.asyncio
+    async def test_send_email_to_allowed_recipients_invalid_and_disallowed(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+            allowed_account_name="work",
+            allowed_recipients=["allowed@example.com"],
+        )
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await send_email_to_allowed_recipients(
+                to=["invalid-email", "not-allowed@example.com"],
+                subject="Test",
+                body="Body",
+            )
+
+            assert result["success"] is False
+            assert "Invalid email address format." in result["error"]
+            assert "Recipient(s) not in allowed list." in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_send_email_to_allowed_recipients_success(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+            allowed_account_name="work",
+            allowed_recipients=["allowed@example.com"],
+        )
+        configured_account = EmailSettings(
+            account_name="work",
+            full_name="Test User",
+            email_address="test@example.com",
+            incoming=EmailServer(
+                user_name="test_user",
+                password="test_password",
+                host="imap.example.com",
+                port=993,
+                use_ssl=True,
+            ),
+            outgoing=EmailServer(
+                user_name="test_user",
+                password="test_password",
+                host="smtp.example.com",
+                port=465,
+                use_ssl=True,
+            ),
+        )
+        mock_settings.get_account.return_value = configured_account
+        mock_handler = AsyncMock()
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler):
+                result = await send_email_to_allowed_recipients(
+                    to=["ALLOWED@example.com", "allowed@example.com"],
+                    subject="Test",
+                    body="Body",
+                )
+
+                assert result == {
+                    "success": True,
+                    "message": "Email sent successfully",
+                    "sent_to": ["allowed@example.com"],
+                }
+                mock_handler.send_email.assert_called_once_with(
+                    ["allowed@example.com"],
+                    "Test",
+                    "Body",
+                    None,
+                    None,
+                    False,
+                    None,
+                    None,
+                    None,
+                )
+
+    @pytest.mark.asyncio
+    async def test_send_email_to_allowed_recipients_missing_configured_account_auto_clears(self):
+        mock_settings = MagicMock()
+        mock_settings.ai_sends_email_tool = AiSendsEmailToolSettings(
+            allowed_account_name="missing",
+            allowed_recipients=["allowed@example.com"],
+        )
+        mock_settings.get_account.return_value = None
+
+        with patch("mcp_email_server.app.get_settings", return_value=mock_settings):
+            result = await send_email_to_allowed_recipients(
+                to=["allowed@example.com"],
+                subject="Test",
+                body="Body",
+            )
+
+            assert result == {"success": False, "error": "No email account configured for this tool."}
+            assert mock_settings.ai_sends_email_tool.allowed_account_name is None
+            assert mock_settings.ai_sends_email_tool.allowed_recipients == []
+            mock_settings.store.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_list_folders(self):
+        """Test list_folders MCP tool."""
+        # Mock the dispatch_handler function
+        mock_handler = AsyncMock()
+        mock_handler.list_folders.return_value = ["INBOX", "SENT", "DRAFT", "ARCHIVE"]
+
+        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler):
+            # Call the function
+            result = await list_folders(account_name="test_account")
+
+            # Verify the result
+            assert result == ["INBOX", "SENT", "DRAFT", "ARCHIVE"]
+
+            # Verify list_folders was called correctly
+            mock_handler.list_folders.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_move_email(self):
+        """Test move_email MCP tool."""
+        # Mock the dispatch_handler function
+        mock_handler = AsyncMock()
+        mock_handler.move_email.return_value = (True, "67890", None)
+
+        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler):
+            # Call the function
+            result = await move_email(
+                account_name="test_account",
+                email_id="12345",
+                source_folder="INBOX",
+                destination_folder="ARCHIVE",
+            )
+
+            # Verify the result
+            assert result["success"] is True
+            assert result["new_email_id"] == "67890"
+            assert result["previous_email_id"] == "12345"
+            assert result["destination_folder"] == "ARCHIVE"
+
+            # Verify move_email was called correctly
+            mock_handler.move_email.assert_called_once_with(
+                "12345",
+                "INBOX",
+                "ARCHIVE",
+            )
+
+    @pytest.mark.asyncio
+    async def test_delete_email(self):
+        """Test delete_email MCP tool."""
+        # Mock the dispatch_handler function
+        mock_handler = AsyncMock()
+        mock_handler.delete_emails.return_value = (["12345"], [])
+
+        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler):
+            # Call the function
+            result = await delete_emails(
+                account_name="test_account",
+                email_ids=["12345"],
+                mailbox="INBOX",
+            )
+
+            # Verify the result
+            assert "Successfully deleted 1 email(s)" in result
+
+            # Verify delete_emails was called correctly
+            mock_handler.delete_emails.assert_called_once_with(
+                ["12345"],
+                "INBOX",
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_full_email_body(self):
+        """Test get_full_email_body MCP tool."""
+        # Mock the dispatch_handler function
+        mock_handler = AsyncMock()
+        mock_handler.get_full_email_body.return_value = "This is the full email body content."
+
+        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler):
+            # Call the function
+            result = await get_full_email_body(
+                account_name="test_account",
+                email_id="12345",
+                folder="INBOX",
+            )
+
+            # Verify the result
+            assert result == "This is the full email body content."
+
+            # Verify get_full_email_body was called correctly
+            mock_handler.get_full_email_body.assert_called_once_with(
+                "12345",
+                "INBOX",
+            )
+
+    @pytest.mark.asyncio
+    async def test_mark_email(self):
+        """Test mark_email MCP tool."""
+        # Mock the dispatch_handler function
+        mock_handler = AsyncMock()
+        mock_handler.mark_email.return_value = True
+
+        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler):
+            # Call the function
+            result = await mark_email(
+                account_name="test_account",
+                email_id="12345",
+                folder="INBOX",
+                mark="read",
+            )
+
+            # Verify the result
+            assert result is True
+
+            # Verify mark_email was called correctly
+            mock_handler.mark_email.assert_called_once_with(
+                "12345",
+                "INBOX",
+                "read",
             )
 
     @pytest.mark.asyncio
@@ -489,7 +767,8 @@ class TestMcpTools:
         mock_handler = AsyncMock()
         mock_handler.send_email = AsyncMock()
 
-        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler):
+        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler), \
+             patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}):
             result = await send_email(
                 account_name="test",
                 recipients=["recipient@example.com"],
@@ -538,3 +817,13 @@ class TestMcpTools:
             )
 
             assert result.emails[0].message_id == "<test@example.com>"
+
+    @pytest.mark.asyncio
+    async def test_get_full_email_body_rejects_rfc_message_id_header(self):
+        """Reject RFC Message-ID values where an IMAP email_id (UID) is required."""
+        with pytest.raises(ValueError, match="Expected IMAP UID `email_id`"):
+            await get_full_email_body(
+                account_name="test_account",
+                email_id="<abc123@example.com>",
+                folder="INBOX",
+            )

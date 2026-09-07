@@ -27,7 +27,6 @@ class EmailMetadata(BaseModel):
             attachments=email["attachments"],
         )
 
-
 class EmailMetadataPageResponse(BaseModel):
     """Paged email metadata response"""
 

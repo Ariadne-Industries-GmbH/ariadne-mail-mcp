@@ -1,4 +1,5 @@
 import os
+import sys
 
 import typer
 
@@ -46,5 +47,14 @@ def reset():
     typer.echo("✅ Config reset")
 
 
+def main():
+    # Wenn NUR das Script ausgeführt wird (ohne weitere Argumente)
+    if len(sys.argv) == 1:
+        from mcp_email_server.ui import main as ui_main
+        ui_main()
+    else:
+        app()
+
+
 if __name__ == "__main__":
-    app(["stdio"])
+    main()

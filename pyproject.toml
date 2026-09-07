@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mcp-email-server = "mcp_email_server.cli:app"
+mcp-email-server = "mcp_email_server.cli:main"
 
 [project.urls]
 Homepage = "https://ai-zerolab.github.io/mcp-email-server/"
@@ -50,6 +50,8 @@ dev = [
     "mkdocs>=1.4.2",
     "mkdocs-material>=8.5.10",
     "mkdocstrings[python]>=0.26.1",
+    "pyinstaller>=6.13.0",
+    "nuitka>=2.7.5",
 ]
 
 [build-system]
