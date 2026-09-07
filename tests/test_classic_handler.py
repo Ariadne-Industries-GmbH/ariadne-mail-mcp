@@ -152,7 +152,7 @@ class TestClassicEmailHandler:
     async def test_send_email(self, classic_handler):
         """Test send_email method."""
         # Mock the outgoing_client.send_email method
-        mock_send = AsyncMock()
+        mock_send = AsyncMock(return_value=None)
 
         # Apply the mock
         with patch.object(classic_handler.outgoing_client, "send_email", mock_send):
@@ -186,7 +186,7 @@ class TestClassicEmailHandler:
         test_file.write_text("This is a test attachment")
 
         # Mock the outgoing_client.send_email method
-        mock_send = AsyncMock()
+        mock_send = AsyncMock(return_value=None)
 
         # Apply the mock
         with patch.object(classic_handler.outgoing_client, "send_email", mock_send):
@@ -296,7 +296,10 @@ class TestClassicEmailHandler:
         mock_smtp.login = AsyncMock()
         mock_smtp.send_message = AsyncMock()
 
-        with patch("aiosmtplib.SMTP", return_value=mock_smtp):
+        with (
+            patch("aiosmtplib.SMTP", return_value=mock_smtp),
+            patch.object(classic_handler.outgoing_client, "append_to_sent", new_callable=AsyncMock),
+        ):
             await classic_handler.send_email(
                 recipients=["recipient@example.com"],
                 subject="Re: Test",

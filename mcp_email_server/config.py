@@ -4,11 +4,11 @@ import datetime
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import tomli_w
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -17,11 +17,28 @@ from pydantic_settings import (
 )
 
 from mcp_email_server.log import logger
+from mcp_email_server.paths import atomic_private_write, get_config_path
 
-DEFAULT_CONFIG_PATH = "./mcp_email_server/config.toml"
+DEFAULT_CONFIG_PATH = str(get_config_path())
 
 CONFIG_PATH = Path(os.getenv("MCP_EMAIL_SERVER_CONFIG_PATH", DEFAULT_CONFIG_PATH)).expanduser().resolve()
 EMAIL_ADDRESS_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class OAuthAccount(BaseModel):
+    """Public account metadata. Tokens live exclusively in the OS credential store."""
+
+    provider: Literal["google", "microsoft"]
+    client_id: str
+    credential_id: str = Field(repr=False)
+    tenant: str = "common"
+
+    @field_validator("tenant")
+    @classmethod
+    def validate_tenant(cls, value: str) -> str:
+        if not re.fullmatch(r"[a-zA-Z0-9.-]+", value):
+            raise ValueError("Invalid Microsoft tenant.")
+        return value
 
 
 class EmailServer(BaseModel):
@@ -37,25 +54,17 @@ class EmailServer(BaseModel):
 
 
 class AccountAttributes(BaseModel):
-    model_config = ConfigDict(json_encoders={datetime.datetime: lambda v: v.isoformat()})
+    model_config = ConfigDict(validate_assignment=True)
     account_name: str
     description: str = ""
     created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(ZoneInfo("UTC")))
     updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(ZoneInfo("UTC")))
 
     @model_validator(mode="after")
-    @classmethod
-    def update_updated_at(cls, obj: AccountAttributes) -> AccountAttributes:
-        """Update updated_at field."""
-        # must disable validation to avoid infinite loop
-        obj.model_config["validate_assignment"] = False
-
-        # update updated_at field
-        obj.updated_at = datetime.datetime.now(ZoneInfo("UTC"))
-
-        # enable validation again
-        obj.model_config["validate_assignment"] = True
-        return obj
+    def update_updated_at(self) -> AccountAttributes:
+        """Update without mutating class-wide validation settings."""
+        object.__setattr__(self, "updated_at", datetime.datetime.now(ZoneInfo("UTC")))
+        return self
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, AccountAttributes):
@@ -79,6 +88,24 @@ class EmailSettings(AccountAttributes):
     outgoing: EmailServer
     save_to_sent: bool = True  # Save sent emails to IMAP Sent folder
     sent_folder_name: str | None = None  # Override Sent folder name (auto-detect if None)
+    oauth: OAuthAccount | None = None
+
+    @model_validator(mode="after")
+    def validate_oauth_servers(self) -> EmailSettings:
+        if self.oauth:
+            hosts = {
+                "google": ("imap.gmail.com", "smtp.gmail.com"),
+                "microsoft": ("outlook.office365.com", "smtp.office365.com"),
+            }[self.oauth.provider]
+            if (self.incoming.host, self.outgoing.host) != hosts:
+                raise ValueError("OAuth credentials must only be sent to the selected provider's mail servers.")
+            if not self.incoming.use_ssl or not (self.outgoing.use_ssl or self.outgoing.start_ssl):
+                raise ValueError("OAuth requires encrypted IMAP and SMTP connections.")
+            if not EMAIL_ADDRESS_REGEX.fullmatch(self.email_address):
+                raise ValueError("Invalid OAuth mailbox address.")
+            if self.incoming.user_name != self.email_address or self.outgoing.user_name != self.email_address:
+                raise ValueError("OAuth login must match the configured mailbox address.")
+        return self
 
     @classmethod
     def init(
@@ -192,8 +219,8 @@ class EmailSettings(AccountAttributes):
                 save_to_sent=parse_bool(os.getenv("MCP_EMAIL_SERVER_SAVE_TO_SENT"), True),
                 sent_folder_name=os.getenv("MCP_EMAIL_SERVER_SENT_FOLDER_NAME"),
             )
-        except (ValueError, TypeError) as e:
-            logger.error(f"Failed to create email settings from environment variables: {e}")
+        except (ValueError, TypeError):
+            logger.error("Invalid email environment configuration; check required values and ports.")
             return None
 
     def masked(self) -> EmailSettings:
@@ -201,6 +228,7 @@ class EmailSettings(AccountAttributes):
             update={
                 "incoming": self.incoming.masked(),
                 "outgoing": self.outgoing.masked(),
+                "oauth": self.oauth.model_copy(update={"credential_id": "********"}) if self.oauth else None,
             }
         )
 
@@ -268,6 +296,9 @@ def _parse_bool_env(value: str | None, default: bool = False) -> bool:
 
 
 class Settings(BaseSettings):
+    _config_path: Path = PrivateAttr(default_factory=get_config_path)
+    _env_account_name: str | None = PrivateAttr(default=None)
+    _original_env_email: EmailSettings | None = PrivateAttr(default=None)
     emails: list[EmailSettings] = []
     providers: list[ProviderSettings] = []
     ai_sends_email_tool: AiSendsEmailToolSettings = Field(default_factory=AiSendsEmailToolSettings)
@@ -279,6 +310,8 @@ class Settings(BaseSettings):
     def __init__(self, **data: Any) -> None:
         """Initialize Settings with support for environment variables."""
         super().__init__(**data)
+        if "db_location" not in self.model_fields_set:
+            self.db_location = str(self._config_path.with_name("db.sqlite3"))
 
         # Check for enable_attachment_download from environment variable
         env_enable_attachment = os.getenv("MCP_EMAIL_SERVER_ENABLE_ATTACHMENT_DOWNLOAD")
@@ -289,6 +322,7 @@ class Settings(BaseSettings):
         # Check for email configuration from environment variables
         env_email = EmailSettings.from_env()
         if env_email:
+            self._env_account_name = env_email.account_name
             # Check if this account already exists (from TOML)
             existing_account = None
             for i, email in enumerate(self.emails):
@@ -297,6 +331,7 @@ class Settings(BaseSettings):
                     break
 
             if existing_account is not None:
+                self._original_env_email = self.emails[existing_account].model_copy(deep=True)
                 # Replace existing account with env configuration
                 self.emails[existing_account] = env_email
                 logger.info(f"Overriding email account '{env_email.account_name}' with environment variables")
@@ -363,27 +398,38 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return (TomlConfigSettingsSource(settings_cls),)
+        return (init_settings, TomlConfigSettingsSource(settings_cls, toml_file=get_config_path()))
 
     def _to_toml(self) -> str:
         data = self.model_dump(exclude_none=True)
+        if self._env_account_name:
+            data["emails"] = [e for e in data["emails"] if e["account_name"] != self._env_account_name]
+            if self._original_env_email:
+                data["emails"].append(self._original_env_email.model_dump(exclude_none=True))
+        if os.getenv("MCP_EMAIL_SERVER_ENABLE_ATTACHMENT_DOWNLOAD") is not None:
+            # Keep the on-disk value rather than persisting a deployment override.
+            stored = TomlConfigSettingsSource(type(self), toml_file=self._config_path)()
+            data["enable_attachment_download"] = stored.get("enable_attachment_download", False)
         return tomli_w.dumps(data)
 
     def store(self) -> None:
-        toml_file = self.model_config["toml_file"]
-        toml_file.parent.mkdir(parents=True, exist_ok=True)
-        toml_file.write_text(self._to_toml())
+        toml_file = self._config_path
+        atomic_private_write(toml_file, self._to_toml())
         logger.info(f"Settings stored in {toml_file}")
 
 
 _settings = None
+_settings_signature = None
 
 
 def get_settings(reload: bool = False) -> Settings:
-    global _settings
-    if not _settings or reload:
-        logger.info(f"Loading settings from {CONFIG_PATH}")
+    global _settings, _settings_signature
+    path = get_config_path()
+    signature = (path, path.stat().st_mtime_ns if path.exists() else None)
+    if not _settings or reload or signature != _settings_signature:
+        logger.info(f"Loading settings from {path}")
         _settings = Settings()
+        _settings_signature = signature
     return _settings
 
 
@@ -395,8 +441,12 @@ def store_settings(settings: Settings | None = None) -> None:
 
 
 def delete_settings() -> None:
-    if not CONFIG_PATH.exists():
-        logger.info(f"Settings file {CONFIG_PATH} does not exist")
+    global _settings, _settings_signature
+    _settings = None
+    _settings_signature = None
+    path = get_config_path()
+    if not path.exists():
+        logger.info(f"Settings file {path} does not exist")
         return
-    CONFIG_PATH.unlink()
-    logger.info(f"Deleted settings file {CONFIG_PATH}")
+    path.unlink()
+    logger.info(f"Deleted settings file {path}")

@@ -71,6 +71,7 @@ def _validate_and_normalize_recipients(recipients: list[str]) -> tuple[list[str]
 
     return normalized_recipients, invalid_inputs
 
+
 @mcp.resource("email://{account_name}")
 async def get_account(account_name: str) -> EmailSettings | ProviderSettings | None:
     settings = get_settings()
@@ -107,7 +108,9 @@ async def get_allowed_recipients() -> dict[str, Any]:
     )
 )
 async def send_email_to_allowed_recipients(
-    to: Annotated[list[str], Field(description="List of recipient email addresses. Can be a subset of the allowed recipients.")],
+    to: Annotated[
+        list[str], Field(description="List of recipient email addresses. Can be a subset of the allowed recipients.")
+    ],
     subject: Annotated[str, Field(description="Email subject.")],
     body: Annotated[str, Field(description="Email body.")],
 ) -> dict[str, Any]:
@@ -146,6 +149,7 @@ async def send_email_to_allowed_recipients(
         "message": "Email sent successfully",
         "sent_to": normalized_to,
     }
+
 
 @mcp.tool(
     description="List email metadata (email_id, subject, sender, recipients, date) without body content. Returns email_id for use with get_emails_content."
@@ -190,6 +194,7 @@ async def list_emails_metadata(
         order=order,
         mailbox=mailbox,
     )
+
 
 @mcp.tool(
     description="Get the full content (including body) of one or more emails by their email_id. Use list_emails_metadata first to get the email_id."
@@ -258,16 +263,16 @@ async def send_email(
         )
     handler = dispatch_handler(account_name)
     await handler.send_email(
-            recipients,
-            subject,
-            body,
-            cc,
-            bcc,
-            html,
-            attachments,
-            in_reply_to,
-            references,
-        )
+        recipients,
+        subject,
+        body,
+        cc,
+        bcc,
+        html,
+        attachments,
+        in_reply_to,
+        references,
+    )
     recipient_str = ", ".join(recipients)
     attachment_info = f" with {len(attachments)} attachment(s)" if attachments else ""
     return f"Email sent successfully to {recipient_str}{attachment_info}"
@@ -318,10 +323,12 @@ async def download_attachment(
     handler = dispatch_handler(account_name)
     return await handler.download_attachment(email_id, attachment_name, save_path)
 
+
 @mcp.tool(description="List all folders in the specified email account.")
 async def list_folders(account_name: Annotated[str, Field(description="The name of the email account.")]) -> list[str]:
     handler = dispatch_handler(account_name)
     return await handler.list_folders()
+
 
 @mcp.tool(
     description=(
@@ -381,6 +388,7 @@ async def get_full_email_body(
     email_id = _validate_imap_uid(email_id)
     handler = dispatch_handler(account_name)
     return await handler.get_full_email_body(email_id, folder)
+
 
 @mcp.tool(
     description="Mark an email (read/unread/flagged/unflagged/answered/draft) in the specified folder.",

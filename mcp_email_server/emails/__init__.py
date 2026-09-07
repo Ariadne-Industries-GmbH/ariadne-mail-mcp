@@ -1,6 +1,6 @@
 import abc
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from mcp_email_server.emails.models import (
@@ -8,6 +8,7 @@ if TYPE_CHECKING:
         EmailContentBatchResponse,
         EmailMetadataPageResponse,
     )
+
 
 class EmailHandler(abc.ABC):
     @abc.abstractmethod
@@ -63,8 +64,6 @@ class EmailHandler(abc.ABC):
         callers must use it to address the email in the destination folder,
         because the source UID does not survive a move.
         """
-
-
 
     @abc.abstractmethod
     async def get_full_email_body(self, email_id: str, folder: str = "INBOX") -> str:

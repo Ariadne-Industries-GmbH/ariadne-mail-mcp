@@ -269,7 +269,7 @@ class TestEmailClientAppendToSent:
         mock._client_task = asyncio.Future()
         mock._client_task.set_result(None)
         mock.wait_hello_from_server = AsyncMock()
-        mock.login = AsyncMock()
+        mock.login = AsyncMock(return_value=("OK", []))
         mock.select = AsyncMock(return_value=("OK", []))
         mock.append = AsyncMock(return_value=("OK", []))
         mock.logout = AsyncMock()

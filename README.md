@@ -9,6 +9,22 @@
 
 IMAP and SMTP via MCP Server
 
+## Für Kunden: starten und einrichten
+
+Ein allgemeiner MCP-Server mit lokaler Gradio-Oberfläche, klassischem IMAP/SMTP und
+Google-/Microsoft-Anmeldung über OAuth. Die nativen Windows-/Linux-Pakete benötigen keine Python-Installation.
+
+1. Passendes Release-Archiv entpacken und `mcp-email-server.exe` (Windows) beziehungsweise `mcp-email-server` (Linux) starten.
+2. Unter **Postfächer** ein Konto hinzufügen. Für Google/Microsoft führt die UI Schritt für Schritt durch die Einrichtung
+   einer eigenen OAuth-App beim Anbieter. Es wird keine zentrale App des Herausgebers vorausgesetzt.
+3. Verbindung testen und speichern. Unter **Freigaben** bei Bedarf Empfänger und Anhang-Downloads freigeben.
+4. Unter **Mit KI verbinden** den MCP-Eintrag übernehmen oder die bestehende Ariadne-Integration nutzen.
+
+Die [Kundenanleitung](docs/customer-setup.md) beschreibt Installation, Speicherorte, Migration und Fehlerhilfe.
+Für Entwickler: `uv run mcp-email-server ui`.
+
+![Postfächer einrichten](docs/assets/setup-postfaecher.png)
+
 - **Github repository**: <https://github.com/ai-zerolab/mcp-email-server/>
 - **Documentation** <https://ai-zerolab.github.io/mcp-email-server/>
 
@@ -202,10 +218,10 @@ The server exposes MCP resources/tools for email workflows.
 - Tool `add_email_account(email: EmailSettings)` → string
   - Adds an account and persists to TOML. Returns a success message.
 
-- Tool `page_email(account_name, page=1, page_size=10, before?, since?, subject?, body?, text?, from_address?, to_address?, order=\"desc\")` → EmailPageResponse
-  - Paginates INBOX with filters. Response: `{ page, page_size, before, since, subject, body, text, total, emails[] }` where `emails[]` are previews (truncated bodies).
+- Tool `list_emails_metadata(account_name, page=1, page_size=10, before?, since?, subject?, from_address?, to_address?, order?, mailbox?)`
+  - Paginates metadata; use returned IMAP UIDs with `get_emails_content` to fetch full messages.
 
-- Tool `send_email(account_name, recipients, subject, body, cc?, bcc?)` → string
+- Internal Python function `send_email(account_name, recipients, subject, body, cc?, bcc?)` → string (not exposed as an MCP tool)
   - Sends an email (UTF‑8 safe subject/sender). Returns: `"Email sent successfully to <first-recipient>"`.
   - Controlled by env: disabled by default. Set `MCP_EMAIL_SERVER_ENABLE_SENDING=true` (or `1/yes/on`) to enable. When disabled, the tool raises a permission error.
 
@@ -214,7 +230,7 @@ The server exposes MCP resources/tools for email workflows.
   - If none configured: `{ "allowed_recipients": [], "error": "No allowed recipients configured." }`.
 
 - Tool `send_email_to_allowed_recipients(to, subject, body)` → object
-  - Uses a fixed account configured in the UI (`AI Sends Email Tool` section).
+  - Uses a fixed account configured under **Freigaben** in the UI.
   - `to` must be a non-empty list and every address must be valid + included in the allowed list.
   - Returns compact JSON:
     - Success: `{ "success": true, "message": "Email sent successfully", "sent_to": [...] }`
@@ -224,11 +240,11 @@ The server exposes MCP resources/tools for email workflows.
 - Tool `list_folders(account_name)` → list[str]
   - Lists IMAP folders.
 
-- Tool `move_email(account_name, email_id, source_folder, destination_folder)` → string
+- Tool `move_email(account_name, email_id, source_folder, destination_folder)` → object
   - `email_id` must be the IMAP UID from `list_emails_metadata` (not the RFC `message_id` header).
-  - Copies to destination, flags deleted in source, expunges.
+  - Copies to destination and flags the source as deleted. Returns the destination UID when available; otherwise look it up in the destination folder. Does not globally expunge unrelated deleted messages.
 
-- Tool `delete_emails(account_name, email_ids, mailbox=\"INBOX\")` → string
+- Internal Python function `delete_emails(account_name, email_ids, mailbox=\"INBOX\")` → string (not exposed as an MCP tool)
   - `email_ids` are IMAP UIDs from `list_emails_metadata`.
   - Flags deleted and expunges.
 
@@ -240,9 +256,9 @@ The server exposes MCP resources/tools for email workflows.
   - `email_id` must be the IMAP UID from `list_emails_metadata`.
   - Marks message using IMAP flags. `mark` in `{ "read", "unread", "flagged", "unflagged", "answered", "draft" }`.
 
-### Provider Accounts (Not Supported Yet)
+### Google and Microsoft OAuth
 
-The config schema includes `ProviderSettings` for future API-based providers (e.g., Gmail/Outlook). These are currently not supported by this server — attempting to use a provider account results in a clear error. For provider-backed workflows, use another MCP server that implements provider handlers.
+Google and Microsoft accounts use `EmailSettings.oauth` and XOAUTH2 over IMAP/SMTP, so the existing mail and folder tools remain available. The UI provides customer-owned app registration instructions, browser login with PKCE, and connection diagnostics. Tokens are refreshed automatically and stored in the operating-system keyring. Provider/tenant consent and enabled mail protocols are prerequisites. The legacy generic `ProviderSettings` API-key model still has no handler; it is not the OAuth account format.
 
 Example invocation (arguments shape) for `page_email`:
 
@@ -304,106 +320,32 @@ Use `uv run mcp-email-server` for local development.
 
 For more details, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/cicd/#how-to-trigger-a-release).
 
-## Build Binary
+## Build native binaries
+
+Build on the target operating system; PyInstaller does not cross-compile Windows from Linux.
 
 ```bash
-pyi-makespec --onefile --name mcp_email_server_bin main.py --collect-data gradio --collect-data gradio_client --collect-data safehttpx --hidden-import anyio --hidden-import starlette.routing
+uv sync --locked
+uv run pyinstaller --noconfirm --clean mcp_email_server.spec
+uv run python dev/smoke_binary.py dist/mcp-email-server
 ```
 
-Adapt mcp_email_server.spec file:
+On Windows, the executable and smoke-test argument are `dist/mcp-email-server.exe`.
+The committed spec bundles the Gradio UI, provider setup guides, OAuth support and credential-store backends.
+Do not regenerate the spec or include a customer's configuration in the build.
 
-```
-# -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files, collect_all, collect_submodules
+The `Windows and Linux binaries` workflow builds x86-64 executables on Windows 2022 and Ubuntu 22.04,
+runs tests, checks the MCP handshake/tool list, and starts the packaged UI from a clean directory.
+Pull requests and main builds produce downloadable artifacts. A published release attaches ZIP/tar.gz archives
+and SHA-256 checksums after both native builds pass. Linux release builds target glibc 2.35 or newer;
+a local build inherits the build machine's glibc requirement.
 
-datas = []
-binaries = []
-hiddenimports = ['anyio', 'starlette.routing']
-
-# Datenfiles der Pakete einsammeln
-datas += collect_data_files('gradio')
-datas += collect_data_files('gradio_client')
-datas += collect_data_files('safehttpx')
-
-# numpy komplett (Tuple: (datas, binaries, hiddenimports))
-d, b, h = collect_all('numpy')
-datas += d; binaries += b; hiddenimports += h
-
-# groovy komplett – wichtig wegen version.txt & Co.
-d, b, h = collect_all('groovy')
-datas += d; binaries += b; hiddenimports += h
-
-# Gradio-Submodule sicherheitshalber explizit
-hiddenimports += collect_submodules('gradio')
-
-a = Analysis(
-    ['main.py'],
-    pathex=[],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=['rthook_no_pyi.py'],   # Runtime-Hook aktivieren
-    excludes=[],
-    noarchive=False,
-    optimize=0,
-    # WICHTIG: Gradio/Groovy als .py sammeln (nicht nur .pyc in der Zipsammlung)
-    module_collection_mode={
-        "gradio": "py",
-        "groovy": "py",
-    },
-)
-
-pyz = PYZ(a.pure)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name='mcp_email_server_bin',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=True,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-
-```
-
-Run PyInstaller (recommended after recreating `.venv`):
-```bash
-uv sync --group dev
-.venv/bin/python -m PyInstaller --clean mcp_email_server.spec
-```
-
-The executable will be written to:
+For a browser regression check and screenshots, developers can run:
 
 ```bash
-dist/mcp_email_server_bin
+uv run --with playwright playwright install chromium
+uv run --with playwright python dev/smoke_ui.py
 ```
 
-Alternative (if your virtualenv entrypoint scripts are valid):
-
-```bash
-.venv/bin/pyinstaller --clean mcp_email_server.spec
-```
-
-### Use the CLI (but this currently not works properly)
-
-```bash
-pyinstaller --onefile --name mcp_email_server_bin main.py --collect-data gradio --collect-data gradio_client --collect-data safehttpx --hidden-import anyio --hidden-import starlette.routing --collect-data numpy --hidden-import numpy
-```
-
-```bash
-python -m nuitka --standalone --onefile main.py
-```
+The browser check uses temporary demo settings. OAuth provider consent itself must be checked with a
+customer-owned application and mailbox; no shared publisher application or account is bundled.

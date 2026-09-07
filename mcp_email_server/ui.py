@@ -1,664 +1,438 @@
-import json
-import logging
+"""Local customer setup: accounts, provider guidance, permissions and integrations."""
+
+import asyncio
+import html
+import os
 import re
-from datetime import datetime
-from urllib.parse import urlparse
+from contextlib import suppress
+from pathlib import Path
+from typing import Any
 
 import gradio as gr
-import httpx
 
-from mcp_email_server.config import (
-    DEFAULT_CONFIG_PATH,
-    AiSendsEmailToolSettings,
-    EmailSettings,
-    get_settings,
-    store_settings,
+from mcp_email_server.config import EMAIL_ADDRESS_REGEX, AiSendsEmailToolSettings, EmailSettings, get_settings
+from mcp_email_server.integrations import client_config, command_path, register_ariadne
+from mcp_email_server.oauth import LoginError, PendingLogin, load_clients, remove_tokens, save_clients
+from mcp_email_server.paths import get_config_path, migrate_legacy_config
+from mcp_email_server.setup import (
+    DEFAULTS,
+    FIELDS,
+    PLAIN,
+    PROVIDERS,
+    STARTTLS,
+    TLS,
+    SetupError,
+    build_account,
+    check_account,
+    env_managed,
+    load_form,
+    save_account,
 )
 
-logger = logging.getLogger(__name__)
-ALLOWED_RECIPIENT_SPLIT_REGEX = re.compile(r"[,\n;]")
-
-
-def _is_valid_url(url: str) -> bool:
-    try:
-        parsed = urlparse(url)
-        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
-    except Exception:
-        return False
+CSS = """
+.gradio-container { max-width: 1080px !important; margin: auto; }
+#intro { padding: 22px 0 12px; }
+#intro h1 { letter-spacing: -.035em; font-size: 2.2rem; }
+.account-summary { padding: 16px; border: 1px solid var(--border-color-primary); border-radius: 12px; }
+footer { display: none !important; }
+"""
 
 
 def _parse_allowed_recipients_input(raw_text: str) -> list[str]:
-    entries = ALLOWED_RECIPIENT_SPLIT_REGEX.split(raw_text or "")
-    return [entry.strip() for entry in entries if entry.strip()]
+    return [entry.strip() for entry in re.split(r"[,\n;]", raw_text or "") if entry.strip()]
 
 
-def create_ui():  # noqa: C901
-    # Create a Gradio interface
-    with gr.Blocks(title="Email Settings Configuration") as app:
-        gr.Markdown("# Email Settings Configuration")
+def _message(error: Exception) -> str:
+    if isinstance(error, (SetupError, LoginError)):
+        return html.escape(str(error))
+    if isinstance(error, OSError):
+        return "Die Einstellungen konnten nicht gespeichert werden. Speicherort und Schreibrechte prüfen."
+    return "Bitte die Eingaben prüfen. Die Einstellungen wurden nicht übernommen."
+
+
+def _connection_report(results: list[tuple[str, bool, str]]) -> str:
+    return "\n\n".join(
+        f"{'✓' if success else '✗'} **{protocol}:** {html.escape(message)}" for protocol, success, message in results
+    )
+
+
+def create_ui() -> gr.Blocks:  # noqa: C901
+    pending_logins: dict[str, PendingLogin] = {}
+    with gr.Blocks(title="E-Mail verbinden", analytics_enabled=False) as app:
         gr.Markdown(
-            "> **Achtung:** Die Zugangsdaten werden im Klartext in "
-            f"`{DEFAULT_CONFIG_PATH}` gespeichert. "
-            "Nutze das Programm nur auf vertrauenswürdigen Rechnern."
+            "# Ihre E-Mails. Mit Ihrer KI.\nPostfächer verbinden, Zugriffe festlegen und den MCP einrichten.",
+            elem_id="intro",
+        )
+        summary = gr.Markdown("Konten werden geladen …", elem_classes="account-summary")
+        original = gr.State(None)
+        with gr.Tabs():
+            with gr.Tab("Postfächer"):
+                with gr.Row():
+                    selected = gr.Dropdown(label="Postfach auswählen", choices=[], interactive=True, scale=3)
+                    new_button = gr.Button("+ Postfach hinzufügen", scale=1)
+                    refresh_button = gr.Button("Aktualisieren", scale=1)
+                edit_button = gr.Button("Ausgewähltes Postfach bearbeiten")
+                with gr.Group():
+                    form_title = gr.Markdown("### Postfach hinzufügen")
+                    provider = gr.Radio(PROVIDERS, value="manual", label="Wie möchten Sie sich verbinden?")
+                    with gr.Row():
+                        address = gr.Textbox(label="E-Mail-Adresse", placeholder="name@firma.de")
+                        full_name = gr.Textbox(label="Absendername", placeholder="Vorname Nachname")
+                    account_name = gr.Textbox(
+                        label="Kontoname (optional)", placeholder="z. B. Arbeit; sonst die E-Mail-Adresse"
+                    )
+                    with gr.Column(elem_id="manual-settings") as manual:
+                        password = gr.Textbox(
+                            label="Passwort / App-Passwort",
+                            type="password",
+                            placeholder="Beim Bearbeiten leer lassen, um es beizubehalten",
+                        )
+                        with gr.Row():
+                            imap_host = gr.Textbox(label="Posteingangsserver (IMAP)", placeholder="imap.firma.de")
+                            smtp_host = gr.Textbox(label="Postausgangsserver (SMTP)", placeholder="smtp.firma.de")
+                        with gr.Accordion("Erweiterte Servereinstellungen", open=False):
+                            user_name = gr.Textbox(label="Anmeldename", placeholder="Standard: E-Mail-Adresse")
+                            with gr.Row():
+                                imap_port = gr.Number(label="IMAP-Port", value=993, precision=0)
+                                imap_security = gr.Dropdown([TLS, PLAIN], value=TLS, label="IMAP-Verschlüsselung")
+                                smtp_port = gr.Number(label="SMTP-Port", value=465, precision=0)
+                                smtp_security = gr.Dropdown(
+                                    [TLS, STARTTLS, PLAIN], value=TLS, label="SMTP-Verschlüsselung"
+                                )
+                            gr.Markdown(
+                                "SMTP: üblicherweise 465 mit SSL/TLS oder 587 mit STARTTLS. Unverschlüsselte Verbindungen übertragen Zugangsdaten ohne Transportschutz."
+                            )
+                            with gr.Row():
+                                imap_user = gr.Textbox(label="Abweichender IMAP-Anmeldename")
+                                imap_password = gr.Textbox(label="Abweichendes IMAP-Passwort", type="password")
+                            with gr.Row():
+                                smtp_user = gr.Textbox(label="Abweichender SMTP-Anmeldename")
+                                smtp_password = gr.Textbox(label="Abweichendes SMTP-Passwort", type="password")
+                            save_sent = gr.Checkbox(
+                                value=True, label="Gesendete E-Mails zusätzlich im IMAP-Ordner ablegen"
+                            )
+                            sent_folder = gr.Textbox(label="Gesendet-Ordner", placeholder="Automatisch erkennen")
+                    with gr.Column(visible=False, elem_id="provider-settings") as provider_setup:
+                        guide = gr.Markdown("", elem_id="provider-guide")
+                        with gr.Accordion("App-Daten für dieses Gerät", open=True):
+                            client_id = gr.Textbox(label="Client-ID / Anwendungs-ID")
+                            client_secret = gr.Textbox(label="Google Desktop-Client-Secret", type="password")
+                            tenant = gr.Textbox(label="Microsoft-Mandant", value="common", visible=False)
+                            app_save = gr.Button("App-Einrichtung speichern")
+                            app_status = gr.Markdown("")
+                        gr.Markdown(
+                            "Tokens bleiben im System-Schlüsselbund. Unter Linux muss dieser eingerichtet und entsperrt sein."
+                        )
+                        with gr.Row():
+                            login_button = gr.Button("Beim Anbieter anmelden", variant="primary")
+                            cancel_login = gr.Button("Anmeldung abbrechen")
+                        login_status = gr.Markdown("")
+                    status = gr.Markdown("")
+                    with gr.Row():
+                        test_button = gr.Button("Verbindung testen")
+                        save_button = gr.Button("Postfach speichern", variant="primary")
+                    gr.Markdown(
+                        "Der Verbindungstest meldet sich nur an. Er versendet keine E-Mails und verändert keine Nachrichten."
+                    )
+                with gr.Accordion("Postfach entfernen", open=False):
+                    confirm_delete = gr.Checkbox(
+                        label="Ich möchte das ausgewählte Postfach aus dieser Anwendung entfernen."
+                    )
+                    delete_button = gr.Button("Ausgewähltes Postfach entfernen", variant="stop")
+                    delete_status = gr.Markdown("")
+                    gr.Markdown(
+                        "E-Mails beim Anbieter bleiben erhalten. Eine Versandfreigabe für dieses Konto wird entfernt."
+                    )
+            with gr.Tab("Freigaben"):
+                gr.Markdown(
+                    "### Versand gezielt erlauben\nDie KI kann nur über das hier gewählte Konto an freigegebene Adressen senden. Ohne Konto und Empfänger bleibt dieser Versand gesperrt."
+                )
+                allowed_account = gr.Dropdown(label="Konto für eingeschränkten Versand", choices=[], interactive=True)
+                recipients = gr.Textbox(label="Freigegebene Empfänger", lines=4, placeholder="Eine Adresse pro Zeile")
+                download = gr.Checkbox(label="Herunterladen von Anhängen auf diesen Rechner erlauben", value=False)
+                gr.Markdown(
+                    "Lesen, Verschieben und Markieren bleiben verfügbar. Allgemeiner Versand und Löschen sind weiterhin nicht als MCP-Werkzeuge freigeschaltet."
+                )
+                with gr.Row():
+                    permission_save = gr.Button("Freigaben speichern", variant="primary")
+                    permission_clear = gr.Button("Versandfreigabe entfernen")
+                permission_status = gr.Markdown("")
+            with gr.Tab("Mit KI verbinden"):
+                gr.Markdown(
+                    "### MCP-Client einrichten\nWählen Sie in Ihrem KI-Client einen lokalen MCP-Server. Verwenden Sie das Programm mit dem Argument `stdio`. Der Client startet den MCP bei Bedarf selbst."
+                )
+                executable = gr.Textbox(label="Pfad zum Programm", value=command_path())
+                config_preview = gr.Code(
+                    label="MCP-Konfiguration kopieren",
+                    language="json",
+                    value=client_config(command_path()),
+                    interactive=False,
+                )
+                gr.Markdown(
+                    "Für Clients mit `mcpServers`-Konfiguration, beispielsweise Claude Desktop. Andere Clients können dieselben Werte über eigene Eingabefelder übernehmen. Bestehende Servereinträge beibehalten. Auf einem anderen Rechner dessen Programm- und Konfigurationspfade verwenden."
+                )
+                with gr.Accordion("Mit Ariadne Engine verbinden", open=False):
+                    gr.Markdown(
+                        "Ariadne startet das Programm auf dem Engine-Rechner. Der Pfad und die Kontokonfiguration müssen dort verfügbar sein."
+                    )
+                    endpoint = gr.Textbox(label="Engine-Endpunkt", placeholder="https://ihre-engine.example/…")
+                    api_key = gr.Textbox(label="Engine-API-Schlüssel", type="password")
+                    spec_name = gr.Textbox(label="Name in Ariadne", value="mcp-email-server")
+                    engine_command = gr.Textbox(label="Programmpfad auf dem Engine-Rechner", value=command_path())
+                    tags = gr.Textbox(label="Tags (optional, durch Kommas getrennt)")
+                    description = gr.Textbox(label="Beschreibung (optional)")
+                    register = gr.Button("In Ariadne registrieren / aktualisieren")
+                    engine_status = gr.Textbox(label="Ergebnis", interactive=False)
+            with gr.Tab("Speicher & Hilfe"):
+                gr.Markdown(
+                    "### Ihre Konfiguration\nSpeicherort: `" + str(get_config_path()) + "`\n\n"
+                    "IMAP-/SMTP-Passwörter liegen in dieser lokalen Datei. Unter Linux sind neue Dateien nur für Ihren Benutzer zugänglich; unter Windows gelten die Rechte Ihres Benutzerprofils. OAuth-Tokens liegen im System-Schlüsselbund.\n\n"
+                    "**Umgebungsvariablen:** Vorgaben einer verwalteten Installation haben Vorrang. Solche Konten werden gekennzeichnet und lassen sich hier nicht überschreiben.\n\n"
+                    "**Verbindungsprobleme:** Server, Passwort, Verschlüsselung und Anbieter-Freigaben prüfen. Die Anleitungen für Google und Microsoft finden Sie bei der Anbieterauswahl.\n\n"
+                    "**Linux-Schlüsselbund:** Für OAuth benötigen Sie einen Secret-Service-Dienst (etwa GNOME-Schlüsselbund oder entsprechend eingerichtetes KWallet), eine D-Bus-Benutzersitzung und einen entsperrten Schlüsselbund.\n\n"
+                    "**Änderungen:** Laufende MCP-Prozesse laden geänderte Kontoeinstellungen beim nächsten Werkzeugaufruf. Nach Änderungen an der Client-Konfiguration den MCP im KI-Client neu starten."
+                )
+        fields = [
+            account_name,
+            full_name,
+            address,
+            provider,
+            user_name,
+            password,
+            imap_host,
+            imap_port,
+            imap_security,
+            imap_user,
+            imap_password,
+            smtp_host,
+            smtp_port,
+            smtp_security,
+            smtp_user,
+            smtp_password,
+            save_sent,
+            sent_folder,
+        ]
+
+        def refresh() -> tuple[Any, ...]:
+            settings = get_settings(reload=True)
+            names = [e.account_name for e in settings.emails]
+            managed = [name for name in names if env_managed(name)]
+            text = (
+                f"**{len(names)} Postfach/Postfächer eingerichtet.**"
+                if names
+                else "**Willkommen.** Verbinden Sie Ihr erstes Postfach, um loszulegen."
+            )
+            if managed:
+                text += " Verwaltet über Umgebungsvariablen: " + html.escape(", ".join(managed))
+            return (
+                text,
+                gr.update(choices=names, value=None),
+                gr.update(choices=names, value=settings.ai_sends_email_tool.allowed_account_name),
+                "\n".join(settings.ai_sends_email_tool.allowed_recipients),
+                gr.update(
+                    value=settings.enable_attachment_download,
+                    interactive=os.getenv("MCP_EMAIL_SERVER_ENABLE_ATTACHMENT_DOWNLOAD") is None,
+                ),
+            )
+
+        refresh_outputs = [summary, selected, allowed_account, recipients, download]
+        app.load(refresh, outputs=refresh_outputs, api_name=False)
+        refresh_button.click(refresh, outputs=refresh_outputs, api_name=False)
+
+        def choose_provider(value: str) -> tuple[Any, ...]:
+            active = value != "manual"
+            client = load_clients().get(value, {})
+            instructions = Path(__file__).with_name(f"{value}-setup.md").read_text(encoding="utf-8") if active else ""
+            return (
+                gr.update(visible=not active),
+                gr.update(visible=active),
+                instructions,
+                client.get("client_id", ""),
+                gr.update(value=client.get("client_secret", ""), visible=value == "google"),
+                gr.update(value=client.get("tenant", "common"), visible=value == "microsoft"),
+            )
+
+        provider.change(
+            choose_provider, provider, [manual, provider_setup, guide, client_id, client_secret, tenant], api_name=False
         )
 
-        # Function to get current accounts
-        def get_current_accounts():
-            settings = get_settings(reload=True)
-            email_accounts = [email.account_name for email in settings.emails]
-            return email_accounts
+        def edit(name: str | None) -> tuple[Any, ...]:
+            if not name:
+                return (None, "### Postfach hinzufügen", "", *DEFAULTS)
+            return (
+                name,
+                "### Postfach bearbeiten",
+                "Passwortfelder leer lassen, um gespeicherte Passwörter beizubehalten.",
+                *load_form(name),
+            )
 
-        # Function to update account list display
-        def update_account_list():
-            settings = get_settings(reload=True)
-            email_accounts = [email.account_name for email in settings.emails]
+        edit_button.click(edit, selected, [original, form_title, status, *fields], api_name=False)
+        new_button.click(lambda: edit(None), outputs=[original, form_title, status, *fields], api_name=False)
 
-            if email_accounts:
-                # Create a detailed list of accounts with more information
-                accounts_details = []
-                for email in settings.emails:
-                    details = [
-                        f"**Account Name:** {email.account_name}",
-                        f"**Full Name:** {email.full_name}",
-                        f"**Email Address:** {email.email_address}",
-                    ]
-
-                    if hasattr(email, "description") and email.description:
-                        details.append(f"**Description:** {email.description}")
-
-                    # Add IMAP/SMTP provider info if available
-                    if hasattr(email, "incoming") and hasattr(email.incoming, "host"):
-                        details.append(f"**IMAP Provider:** {email.incoming.host}")
-
-                    if hasattr(email, "outgoing") and hasattr(email.outgoing, "host"):
-                        details.append(f"**SMTP Provider:** {email.outgoing.host}")
-
-                    accounts_details.append("### " + email.account_name + "\n" + "\n".join(details) + "\n")
-
-                accounts_md = "\n".join(accounts_details)
-                return (
-                    f"## Configured Accounts\n{accounts_md}",
-                    gr.update(choices=email_accounts, value=None),
-                    gr.update(visible=True),
-                )
-            else:
-                return (
-                    "No email accounts configured yet.",
-                    gr.update(choices=[], value=None),
-                    gr.update(visible=False),
-                )
-
-        def update_ai_send_tool_config():
-            settings = get_settings(reload=True)
-            email_accounts = [email.account_name for email in settings.emails]
-            configured_account = settings.ai_sends_email_tool.allowed_account_name
-            if configured_account not in email_accounts:
-                configured_account = None
-            recipients_text = "\n".join(settings.ai_sends_email_tool.allowed_recipients)
-            return gr.update(choices=email_accounts, value=configured_account), recipients_text
-
-        def save_ai_send_tool_config(allowed_account_name: str | None, allowed_recipients_raw: str):
+        def save(original_name: str | None, *raw: Any) -> tuple[Any, ...]:
             try:
-                settings = get_settings()
-                email_accounts = {email.account_name for email in settings.emails}
-                if allowed_account_name and allowed_account_name not in email_accounts:
-                    dropdown_update, recipients_text = update_ai_send_tool_config()
-                    return "Error: Selected account does not exist.", dropdown_update, recipients_text
+                account = build_account(dict(zip(FIELDS, raw, strict=True)), original_name)
+                save_account(account, original_name)
+                return "✓ Postfach gespeichert.", account.account_name, "", "", ""
+            except Exception as error:
+                return _message(error), original_name, gr.skip(), gr.skip(), gr.skip()
 
-                recipients = _parse_allowed_recipients_input(allowed_recipients_raw)
+        save_button.click(
+            save, [original, *fields], [status, original, password, imap_password, smtp_password], api_name=False
+        ).then(refresh, outputs=refresh_outputs, api_name=False)
+
+        async def test(original_name: str | None, *raw: Any) -> str:
+            try:
+                account = build_account(dict(zip(FIELDS, raw, strict=True)), original_name)
+                return _connection_report(await check_account(account))
+            except Exception as error:
+                return _message(error)
+
+        test_button.click(test, [original, *fields], status, api_name=False)
+
+        def save_app(value: str, identifier: str, secret: str, directory: str) -> str:
+            try:
+                clients = load_clients()
+                google, microsoft = clients["google"], clients["microsoft"]
+                if value == "google":
+                    google = {"client_id": identifier, "client_secret": secret}
+                elif value == "microsoft":
+                    microsoft = {"client_id": identifier, "tenant": directory}
+                if not identifier.strip():
+                    return "Bitte die Client-ID aus dem Anbieterportal eingeben."
+                save_clients(
+                    google.get("client_id", ""),
+                    google.get("client_secret", ""),
+                    microsoft.get("client_id", ""),
+                    microsoft.get("tenant", "common"),
+                )
+                return "✓ App-Daten gespeichert. Sie können sich jetzt beim Anbieter anmelden."
+            except Exception as error:
+                return _message(error)
+
+        app_save.click(save_app, [provider, client_id, client_secret, tenant], app_status, api_name=False)
+
+        async def login(request: gr.Request, original_name: str | None, *raw: Any):
+            session = request.session_hash
+            pending = None
+            account_auth = None
+            try:
+                values = dict(zip(FIELDS, raw, strict=True))
+                if not EMAIL_ADDRESS_REGEX.fullmatch(values["email_address"].strip()):
+                    yield "Bitte zuerst die E-Mail-Adresse eingeben.", gr.skip()
+                    return
+                if session in pending_logins:
+                    pending_logins[session].cancel()
+                pending = PendingLogin(values["provider"], values["email_address"].strip())
+                pending_logins[session] = pending
+                yield (
+                    f"[Anmeldung beim Anbieter öffnen]({pending.url})\n\nNach der Anmeldung wird das Postfach geprüft und gespeichert.",
+                    gr.skip(),
+                )
+                while not pending.done.is_set():
+                    await asyncio.sleep(0.5)
+                account_auth = await asyncio.to_thread(pending.finish)
+                account = build_account(values, original_name, account_auth)
+                results = await check_account(account)
+                if not all(success for _, success, _ in results):
+                    yield (
+                        _connection_report(results)
+                        + "\n\nPostfach nicht gespeichert. Bitte Anbieter-Freigaben prüfen und erneut anmelden.",
+                        gr.skip(),
+                    )
+                    return
+                save_account(account, original_name)
+                account_auth = None
+                yield "✓ Anmeldung und Verbindung erfolgreich. Postfach gespeichert.", account.account_name
+            except Exception as error:
+                yield _message(error), gr.skip()
+            finally:
+                if pending:
+                    pending.cancel()
+                    if pending_logins.get(session) is pending:
+                        pending_logins.pop(session, None)
+                if account_auth:
+                    with suppress(LoginError):
+                        remove_tokens(account_auth.credential_id)
+
+        login_button.click(
+            login, [original, *fields], [login_status, original], api_name=False, concurrency_limit=4
+        ).then(refresh, outputs=refresh_outputs, api_name=False)
+
+        def cancel(request: gr.Request) -> str:
+            pending = pending_logins.get(request.session_hash)
+            if pending:
+                pending.cancel()
+            return "Anmeldung abgebrochen."
+
+        cancel_login.click(cancel, outputs=login_status, api_name=False, queue=False)
+
+        def delete(name: str | None, confirmed: bool) -> tuple[str, bool]:
+            if not name or not confirmed:
+                return "Bitte ein Postfach auswählen und das Entfernen bestätigen.", False
+            try:
+                if env_managed(name):
+                    return "Dieses Konto wird über Umgebungsvariablen verwaltet.", False
+                settings = get_settings(reload=True)
+                account = settings.get_account(name)
+                if isinstance(account, EmailSettings) and account.oauth:
+                    remove_tokens(account.oauth.credential_id)
+                settings.delete_email(name)
+                settings.store()
+                return "Postfach entfernt. E-Mails beim Anbieter bleiben erhalten.", False
+            except Exception as error:
+                return _message(error), False
+
+        delete_button.click(delete, [selected, confirm_delete], [delete_status, confirm_delete], api_name=False).then(
+            refresh, outputs=refresh_outputs, api_name=False
+        )
+
+        def permissions(name: str | None, addresses: str, allow_download: bool) -> str:
+            try:
+                settings = get_settings(reload=True)
+                if name and not isinstance(settings.get_account(name), EmailSettings):
+                    return "Bitte ein vorhandenes Postfach auswählen."
+                allowed = _parse_allowed_recipients_input(addresses)
+                if allowed and not name:
+                    return "Bitte das Konto für die Empfängerfreigabe auswählen."
                 settings.ai_sends_email_tool = AiSendsEmailToolSettings(
-                    allowed_account_name=allowed_account_name,
-                    allowed_recipients=recipients,
+                    allowed_account_name=name, allowed_recipients=allowed
                 )
-                store_settings(settings)
-                dropdown_update, recipients_text = update_ai_send_tool_config()
-                return "Success: AI Sends Email Tool configuration saved.", dropdown_update, recipients_text
-            except Exception as e:
-                dropdown_update, recipients_text = update_ai_send_tool_config()
-                return f"Error: {e!s}", dropdown_update, recipients_text
+                settings.enable_attachment_download = allow_download
+                settings.store()
+                return "✓ Freigaben gespeichert."
+            except Exception as error:
+                return _message(error)
 
-        with gr.Accordion("AI Sends Email Tool", open=True):
-            gr.Markdown(
-                "### AI Sends Email Tool Configuration\n"
-                "- Select exactly one allowed account for this tool.\n"
-                "- Enter allowed recipients as one per line or comma-separated."
-            )
-            ai_send_allowed_account = gr.Dropdown(
-                choices=[],
-                label="Allowed Account Selection",
-                interactive=True,
-                allow_custom_value=False,
-            )
-            ai_send_allowed_recipients = gr.Textbox(
-                label="Allowed Recipients List",
-                lines=6,
-                placeholder="recipient1@example.com\nrecipient2@example.com",
-            )
-            ai_send_status = gr.Markdown("")
-            ai_send_save_btn = gr.Button("Save AI Sends Email Tool Settings")
-
-            ai_send_save_btn.click(
-                fn=save_ai_send_tool_config,
-                inputs=[ai_send_allowed_account, ai_send_allowed_recipients],
-                outputs=[ai_send_status, ai_send_allowed_account, ai_send_allowed_recipients],
-            )
-
-            app.load(
-                fn=update_ai_send_tool_config,
-                inputs=None,
-                outputs=[ai_send_allowed_account, ai_send_allowed_recipients],
-            )
-
-        # Display current email accounts and allow deletion
-        with gr.Accordion("Current Email Accounts", open=True):
-            # Display the list of accounts
-            accounts_display = gr.Markdown("")
-
-            # Create a dropdown to select account to delete
-            account_to_delete = gr.Dropdown(choices=[], label="Select Account to Delete", interactive=True)
-
-            # Status message for deletion
-            delete_status = gr.Markdown("")
-
-            # Delete button
-            delete_btn = gr.Button("Delete Selected Account")
-
-            # Function to delete an account
-            def delete_email_account(account_name):
-                if not account_name:
-                    return "Error: Please select an account to delete.", *update_account_list()
-
-                try:
-                    # Get current settings
-                    settings = get_settings()
-
-                    # Delete the account
-                    settings.delete_email(account_name)
-
-                    # Store settings
-                    store_settings(settings)
-
-                    # Return success message and update the UI
-                    return f"Success: Email account '{account_name}' has been deleted.", *update_account_list()
-                except Exception as e:
-                    return f"Error: {e!s}", *update_account_list()
-
-            # Connect the delete button to the delete function
-            delete_event = delete_btn.click(
-                fn=delete_email_account,
-                inputs=[account_to_delete],
-                outputs=[delete_status, accounts_display, account_to_delete, delete_btn],
-            )
-            delete_event.then(
-                fn=update_ai_send_tool_config,
-                inputs=None,
-                outputs=[ai_send_allowed_account, ai_send_allowed_recipients],
-            )
-
-            # Initialize the account list
-            app.load(
-                fn=update_account_list,
-                inputs=None,
-                outputs=[accounts_display, account_to_delete, delete_btn],
-            )
-
-        # Form for adding a new email account
-        with gr.Accordion("Add New Email Account", open=True):
-            gr.Markdown("### Add New Email Account")
-
-            # Basic account information
-            account_name = gr.Textbox(label="Account Name", placeholder="e.g. work_email")
-            full_name = gr.Textbox(label="Full Name", placeholder="e.g. John Doe")
-            email_address = gr.Textbox(label="Email Address", placeholder="e.g. john@example.com")
-
-            # Credentials
-            user_name = gr.Textbox(label="Username", placeholder="e.g. john@example.com")
-            password = gr.Textbox(label="Password", type="password")
-
-            # IMAP settings
-            with gr.Row():
-                with gr.Column():
-                    gr.Markdown("### IMAP Settings")
-                    imap_host = gr.Textbox(label="IMAP Host", placeholder="e.g. imap.example.com")
-                    imap_port = gr.Number(label="IMAP Port", value=993)
-                    imap_ssl = gr.Checkbox(label="Use SSL", value=True)
-                    imap_user_name = gr.Textbox(
-                        label="IMAP Username (optional)", placeholder="Leave empty to use the same as above"
-                    )
-                    imap_password = gr.Textbox(
-                        label="IMAP Password (optional)",
-                        type="password",
-                        placeholder="Leave empty to use the same as above",
-                    )
-
-                # SMTP settings
-                with gr.Column():
-                    gr.Markdown("### SMTP Settings")
-                    smtp_host = gr.Textbox(label="SMTP Host", placeholder="e.g. smtp.example.com")
-                    smtp_port = gr.Number(label="SMTP Port", value=465)
-                    smtp_ssl = gr.Checkbox(label="Use SSL", value=True)
-                    smtp_start_ssl = gr.Checkbox(label="Start SSL", value=False)
-                    smtp_user_name = gr.Textbox(
-                        label="SMTP Username (optional)", placeholder="Leave empty to use the same as above"
-                    )
-                    smtp_password = gr.Textbox(
-                        label="SMTP Password (optional)",
-                        type="password",
-                        placeholder="Leave empty to use the same as above",
-                    )
-
-            # Status message
-            status_message = gr.Markdown("")
-
-            # Save button
-            save_btn = gr.Button("Save Email Settings")
-
-            # Function to save settings
-            def save_email_settings(
-                account_name,
-                full_name,
-                email_address,
-                user_name,
-                password,
-                imap_host,
-                imap_port,
-                imap_ssl,
-                imap_user_name,
-                imap_password,
-                smtp_host,
-                smtp_port,
-                smtp_ssl,
-                smtp_start_ssl,
-                smtp_user_name,
-                smtp_password,
-            ):
-                try:
-                    # Validate required fields
-                    if not account_name or not full_name or not email_address or not user_name or not password:
-                        # Get account list update
-                        account_md, account_choices, btn_visible = update_account_list()
-                        return (
-                            "Error: Please fill in all required fields.",
-                            account_md,
-                            account_choices,
-                            btn_visible,
-                            account_name,
-                            full_name,
-                            email_address,
-                            user_name,
-                            password,
-                            imap_host,
-                            imap_port,
-                            imap_ssl,
-                            imap_user_name,
-                            imap_password,
-                            smtp_host,
-                            smtp_port,
-                            smtp_ssl,
-                            smtp_start_ssl,
-                            smtp_user_name,
-                            smtp_password,
-                        )
-
-                    if not imap_host or not smtp_host:
-                        # Get account list update
-                        account_md, account_choices, btn_visible = update_account_list()
-                        return (
-                            "Error: IMAP and SMTP hosts are required.",
-                            account_md,
-                            account_choices,
-                            btn_visible,
-                            account_name,
-                            full_name,
-                            email_address,
-                            user_name,
-                            password,
-                            imap_host,
-                            imap_port,
-                            imap_ssl,
-                            imap_user_name,
-                            imap_password,
-                            smtp_host,
-                            smtp_port,
-                            smtp_ssl,
-                            smtp_start_ssl,
-                            smtp_user_name,
-                            smtp_password,
-                        )
-
-                    # Get current settings
-                    settings = get_settings()
-
-                    # Check if account name already exists
-                    for email in settings.emails:
-                        if email.account_name == account_name:
-                            # Get account list update
-                            account_md, account_choices, btn_visible = update_account_list()
-                            return (
-                                f"Error: Account name '{account_name}' already exists.",
-                                account_md,
-                                account_choices,
-                                btn_visible,
-                                account_name,
-                                full_name,
-                                email_address,
-                                user_name,
-                                password,
-                                imap_host,
-                                imap_port,
-                                imap_ssl,
-                                imap_user_name,
-                                imap_password,
-                                smtp_host,
-                                smtp_port,
-                                smtp_ssl,
-                                smtp_start_ssl,
-                                smtp_user_name,
-                                smtp_password,
-                            )
-
-                    # Create new email settings
-                    email_settings = EmailSettings.init(
-                        account_name=account_name,
-                        full_name=full_name,
-                        email_address=email_address,
-                        user_name=user_name,
-                        password=password,
-                        imap_host=imap_host,
-                        smtp_host=smtp_host,
-                        imap_port=int(imap_port),
-                        imap_ssl=imap_ssl,
-                        smtp_port=int(smtp_port),
-                        smtp_ssl=smtp_ssl,
-                        smtp_start_ssl=smtp_start_ssl,
-                        imap_user_name=imap_user_name if imap_user_name else None,
-                        imap_password=imap_password if imap_password else None,
-                        smtp_user_name=smtp_user_name if smtp_user_name else None,
-                        smtp_password=smtp_password if smtp_password else None,
-                    )
-
-                    # Add to settings
-                    settings.add_email(email_settings)
-
-                    # Store settings
-                    store_settings(settings)
-
-                    # Get account list update
-                    account_md, account_choices, btn_visible = update_account_list()
-
-                    # Return success message, update the UI, and clear form fields
-                    return (
-                        f"Success: Email account '{account_name}' has been added.",
-                        account_md,
-                        account_choices,
-                        btn_visible,
-                        "",  # Clear account_name
-                        "",  # Clear full_name
-                        "",  # Clear email_address
-                        "",  # Clear user_name
-                        "",  # Clear password
-                        "",  # Clear imap_host
-                        993,  # Reset imap_port
-                        True,  # Reset imap_ssl
-                        "",  # Clear imap_user_name
-                        "",  # Clear imap_password
-                        "",  # Clear smtp_host
-                        465,  # Reset smtp_port
-                        True,  # Reset smtp_ssl
-                        False,  # Reset smtp_start_ssl
-                        "",  # Clear smtp_user_name
-                        "",  # Clear smtp_password
-                    )
-                except Exception as e:
-                    # Get account list update
-                    account_md, account_choices, btn_visible = update_account_list()
-                    return (
-                        f"Error: {e!s}",
-                        account_md,
-                        account_choices,
-                        btn_visible,
-                        account_name,
-                        full_name,
-                        email_address,
-                        user_name,
-                        password,
-                        imap_host,
-                        imap_port,
-                        imap_ssl,
-                        imap_user_name,
-                        imap_password,
-                        smtp_host,
-                        smtp_port,
-                        smtp_ssl,
-                        smtp_start_ssl,
-                        smtp_user_name,
-                        smtp_password,
-                    )
-
-            # Connect the save button to the save function
-            save_event = save_btn.click(
-                fn=save_email_settings,
-                inputs=[
-                    account_name,
-                    full_name,
-                    email_address,
-                    user_name,
-                    password,
-                    imap_host,
-                    imap_port,
-                    imap_ssl,
-                    imap_user_name,
-                    imap_password,
-                    smtp_host,
-                    smtp_port,
-                    smtp_ssl,
-                    smtp_start_ssl,
-                    smtp_user_name,
-                    smtp_password,
-                ],
-                outputs=[
-                    status_message,
-                    accounts_display,
-                    account_to_delete,
-                    delete_btn,
-                    account_name,
-                    full_name,
-                    email_address,
-                    user_name,
-                    password,
-                    imap_host,
-                    imap_port,
-                    imap_ssl,
-                    imap_user_name,
-                    imap_password,
-                    smtp_host,
-                    smtp_port,
-                    smtp_ssl,
-                    smtp_start_ssl,
-                    smtp_user_name,
-                    smtp_password,
-                ],
-            )
-            save_event.then(
-                fn=update_ai_send_tool_config,
-                inputs=None,
-                outputs=[ai_send_allowed_account, ai_send_allowed_recipients],
-            )
-        # Ariadne Engine Registration
-        with gr.Accordion("Ariadne Engine Registration", open=True):
-            gr.Markdown(
-                "### Ariadne Engine Registration\n"
-                "- Register this MCP (stdio) with your Ariadne Engine.\n"
-                "- The MCP will be launched via stdio, no URL is required."
-            )
-
-            def _post_thread(endpoint_url: str, api_key_val: str, thread_name: str, payload: dict) -> httpx.Response:
-                headers = {
-                    "Authorization": f"Bearer {api_key_val}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                }
-                body = {"thread_name": thread_name, "payload": payload}
-                with httpx.Client(timeout=15.0) as client:
-                    return client.post(endpoint_url, headers=headers, json=body)
-
-            def _get_spec_by_name(endpoint_url: str, api_key_val: str, name: str) -> dict:
-                try:
-                    response = _post_thread(
-                        endpoint_url,
-                        api_key_val,
-                        "get-mcp-server-spec-by-name",
-                        {
-                            "path_params": {"name": name},
-                            "query_params": None,
-                            "body_params_serialized": None,
-                        },
-                    )
-                except Exception as exc:  # pragma: no cover - network errors
-                    logger.error("Network error while checking spec name: %s", exc)
-                    return {"error": f"Network error while checking name: {exc}"}
-
-                if response.status_code == 404:
-                    return {"data": None}
-                if not (200 <= response.status_code < 300):
-                    return {"error": f"Lookup failed ({response.status_code}): {response.text[:200]}"}
-                try:
-                    return {"data": response.json()}
-                except Exception:
-                    return {"error": f"Invalid JSON from lookup ({response.status_code})"}
-
-            def configure_engine(
-                api_key: str,
-                endpoint_url: str,
-                spec_name: str,
-                command_path: str,
-                tags_raw: str,
-                description: str | None = None,
-            ) -> str:
-                api_key_s = (api_key or "").strip()
-                endpoint_s = (endpoint_url or "").strip()
-                name_s = (spec_name or "").strip()
-                command_s = (command_path or "").strip()
-                tags_s = (tags_raw or "").strip()
-                description_s = (description or "").strip() if description is not None else ""
-
-                if not api_key_s:
-                    return "API key is required."
-                if not endpoint_s or not _is_valid_url(endpoint_s):
-                    return "Engine endpoint URL must be a valid URL (http/https)."
-                if not name_s:
-                    return "Name is required."
-                if not command_s:
-                    return "Command path is required."
-
-                tags = [tag.strip() for tag in tags_s.split(",") if tag.strip()] if tags_s else []
-
-                dto = {
-                    "key": "",
-                    "name": name_s,
-                    "description": description_s,
-                    "transport": "stdio",
-                    "command": [command_s, "stdio"],
-                    "url": None,
-                    "bearer_token": None,
-                    "env": None,
-                    "tags": tags or None,
-                    "is_standard": False,
-                    "created_at": datetime.now().isoformat(),
-                }
-
-                lookup = _get_spec_by_name(endpoint_s, api_key_s, name_s)
-                if "error" in lookup:
-                    return f"Name check failed: {lookup['error']}"
-
-                existing = lookup.get("data")
-
-                try:
-                    if existing is None:
-                        response = _post_thread(
-                            endpoint_s,
-                            api_key_s,
-                            "create-mcp-server-spec",
-                            {
-                                "path_params": None,
-                                "query_params": None,
-                                "body_params_serialized": json.dumps(dto),
-                            },
-                        )
-                        if response.status_code != 201:
-                            return f"Create failed ({response.status_code}): {response.text[:300]}"
-                        try:
-                            data = response.json().get("data")
-                        except Exception:
-                            data = None
-                        key = (data or {}).get("key") if isinstance(data, dict) else None
-                        return f"Created MCP Server Spec '{name_s}' (key={key or '?'})."
-                    key = existing.get("key") if isinstance(existing, dict) else None
-                    if not key:
-                        return "Update failed: existing spec has no key."
-                    response = _post_thread(
-                        endpoint_s,
-                        api_key_s,
-                        "update-mcp-server-spec",
-                        {
-                            "path_params": {"key": key},
-                            "query_params": None,
-                            "body_params_serialized": json.dumps(dto),
-                        },
-                    )
-                    if response.status_code != 200:
-                        return f"Update failed ({response.status_code}): {response.text[:300]}"
-                    return f"Updated MCP Server Spec '{name_s}' (key={key})."
-                except Exception as exc:  # pragma: no cover - network errors
-                    logger.error("Error contacting engine: %s", exc)
-                    return f"Error contacting engine: {exc}"
-
-            with gr.Row():
-                api_key_input = gr.Textbox(label="Engine API Key (Bearer)", type="password")
-                endpoint_input = gr.Textbox(
-                    label="Engine Endpoint URL",
-                    placeholder="https://aaa.ariadneanyerse.de",
-                )
-
-            with gr.Row():
-                spec_name_input = gr.Textbox(
-                    label="Spec Name (unique)",
-                    placeholder="mcp-email-server",
-                    value="mcp-email-server",
-                )
-                command_path_input = gr.Textbox(
-                    label="MCP Command Path",
-                    placeholder="./mcps/mcp_email_server_bin",
-                    value="./mcps/mcp_email_server_bin",
-                )
-
-            tags_input = gr.Textbox(
-                label="Tags (comma-separated, optional)",
-                placeholder="email, stdio, prod",
-            )
-            description_input = gr.Textbox(label="Description (optional)", lines=3)
-            engine_status = gr.Textbox(label="Engine Status", interactive=False)
-            configure_button = gr.Button("Register / Update in Ariadne Engine")
-
-            configure_button.click(
-                fn=configure_engine,
-                inputs=[
-                    api_key_input,
-                    endpoint_input,
-                    spec_name_input,
-                    command_path_input,
-                    tags_input,
-                    description_input,
-                ],
-                outputs=engine_status,
-            )
-
+        permission_save.click(
+            permissions, [allowed_account, recipients, download], permission_status, api_name=False
+        ).then(refresh, outputs=refresh_outputs, api_name=False)
+        permission_clear.click(
+            lambda value: permissions(None, "", value), download, permission_status, api_name=False
+        ).then(refresh, outputs=refresh_outputs, api_name=False)
+        executable.change(client_config, executable, config_preview, api_name=False)
+        register.click(
+            register_ariadne,
+            [api_key, endpoint, spec_name, engine_command, tags, description],
+            engine_status,
+            api_name=False,
+        )
     return app
 
 
-def main():
+def main(port: int = 8765, open_browser: bool = True) -> None:
+    migrate_legacy_config()
     app = create_ui()
-    app.launch(server_name="127.0.0.1", server_port=8765, inbrowser=True)
+    app.launch(
+        server_name="127.0.0.1",
+        server_port=port,
+        inbrowser=open_browser,
+        share=False,
+        show_error=False,
+        footer_links=[],
+        css=CSS,
+        theme=gr.themes.Soft(primary_hue="teal", neutral_hue="slate"),
+    )
 
 
 if __name__ == "__main__":

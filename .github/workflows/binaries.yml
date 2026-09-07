@@ -1,0 +1,64 @@
+name: Windows and Linux binaries
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            artifact: mcp-email-server-linux-x86_64
+            executable: dist/mcp-email-server
+          - os: windows-2022
+            artifact: mcp-email-server-windows-x86_64
+            executable: dist/mcp-email-server.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run pytest -q
+      - run: uv run pyinstaller --noconfirm --clean mcp_email_server.spec
+      - name: Test binary MCP protocol and setup UI
+        run: uv run python dev/smoke_binary.py ${{ matrix.executable }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.executable }}
+          if-no-files-found: error
+
+  attach-release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Archive native binaries and upload checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          chmod +x artifacts/mcp-email-server-linux-x86_64/mcp-email-server
+          tar -czf mcp-email-server-linux-x86_64.tar.gz -C artifacts/mcp-email-server-linux-x86_64 mcp-email-server
+          zip -j mcp-email-server-windows-x86_64.zip artifacts/mcp-email-server-windows-x86_64/mcp-email-server.exe
+          sha256sum mcp-email-server-linux-x86_64.tar.gz mcp-email-server-windows-x86_64.zip > SHA256SUMS
+          gh release upload "$RELEASE_TAG" mcp-email-server-linux-x86_64.tar.gz mcp-email-server-windows-x86_64.zip SHA256SUMS
