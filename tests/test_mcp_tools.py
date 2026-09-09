@@ -363,8 +363,10 @@ class TestMcpTools:
         mock_handler = AsyncMock()
 
         # Enable email sending for the test
-        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler), \
-             patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}):
+        with (
+            patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler),
+            patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}),
+        ):
             # Call the function
             result = await send_email(
                 account_name="test_account",
@@ -767,8 +769,10 @@ class TestMcpTools:
         mock_handler = AsyncMock()
         mock_handler.send_email = AsyncMock()
 
-        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler), \
-             patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}):
+        with (
+            patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler),
+            patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}),
+        ):
             result = await send_email(
                 account_name="test",
                 recipients=["recipient@example.com"],

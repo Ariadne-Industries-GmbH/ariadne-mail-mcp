@@ -1,6 +1,7 @@
 # MCP Email Server – Capabilities and TODOs
 
 ## Current Capabilities (MCP)
+
 - Resource email://{account_name}: returns masked account config. Status: untested (assumed OK).
 - Tool list_available_accounts(): lists all accounts masked. Status: covered by tests; working.
 - Tool add_email_account(email): adds config and persists to TOML. Status: covered by tests; working.
@@ -12,15 +13,18 @@
 - Tool get_full_email_body(account_name, message_id, folder=INBOX): fetch RFC822 and parse body. Status: implemented; not covered by tests.
 
 ## Known Issues / Mismatches
+
 None currently known beyond items under "Additions to Consider".
 
 ## Additions to Consider
+
 - Provider accounts: dispatch_handler raises NotImplementedError for ProviderSettings. Currently documented as not supported yet.
 - Expand tests to cover: list_folders, move_email, delete_email, get_full_email_body, and get_account resource.
 - Error reporting: surface meaningful errors for IMAP/SMTP failures (timeouts, auth) from tools.
 - Consistent tool returns: ensure all tools return JSON-serializable, documented shapes (e.g., success strings/objects).
 
 ## Next Steps
+
 - [x] Fix send_email to return success message. (Done)
 - [x] Correct EmailData.to_preview().sender. (Done)
 - [ ] Add tests for folder ops and full-body fetch.

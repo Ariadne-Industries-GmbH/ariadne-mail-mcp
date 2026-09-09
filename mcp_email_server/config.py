@@ -375,19 +375,18 @@ class Settings(BaseSettings):
         return accounts
 
     @model_validator(mode="after")
-    @classmethod
-    def check_unique_account_names(cls, obj: Settings) -> Settings:
+    def check_unique_account_names(self) -> Settings:
         account_names = set()
-        for email in obj.emails:
+        for email in self.emails:
             if email.account_name in account_names:
                 raise ValueError(f"Duplicate account name {email.account_name}")
             account_names.add(email.account_name)
-        for provider in obj.providers:
+        for provider in self.providers:
             if provider.account_name in account_names:
                 raise ValueError(f"Duplicate account name {provider.account_name}")
             account_names.add(provider.account_name)
 
-        return obj
+        return self
 
     @classmethod
     def settings_customise_sources(

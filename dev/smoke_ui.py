@@ -22,16 +22,6 @@ def main() -> None:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         app = create_ui()
-        for function in app.fns.values():
-            if function.fn.__name__ == "choose_provider":
-                original_function = function.fn
-
-                def traced_provider(value):
-                    result = original_function(value)
-                    print("Provider callback:", value, "guide length:", len(result[2]))
-                    return result
-
-                function.fn = traced_provider
         app.launch(
             server_name="127.0.0.1",
             server_port=port,
@@ -66,8 +56,9 @@ def main() -> None:
                 page.get_by_role("button", name="+ Postfach hinzufügen", exact=True).click()
                 expect(page.get_by_label("E-Mail-Adresse", exact=True)).to_have_value("")
                 page.get_by_label("Google / Gmail", exact=True).check()
+                page.get_by_text("Google / Microsoft mit OAuth verbinden", exact=True).click()
                 expect(page.get_by_text("Google-App einmalig einrichten", exact=True)).to_be_visible(timeout=15000)
-                expect(page.get_by_label("Posteingangsserver (IMAP)", exact=True)).not_to_be_visible()
+                expect(page.get_by_label("Posteingangsserver (IMAP)", exact=True)).to_be_visible()
                 page.screenshot(path=str(screenshots / "setup-google.png"), full_page=True)
                 page.get_by_role("button", name="Beim Anbieter anmelden", exact=True).click()
                 expect(page.get_by_text("Bitte zuerst die E-Mail-Adresse eingeben.", exact=True)).to_be_visible()

@@ -128,3 +128,7 @@ skip_empty = true
 [tool.coverage.run]
 branch = true
 source = ["mcp_email_server"]
+
+[tool.deptry]
+# Playwright is supplied only to the optional browser-regression command via `uv run --with playwright`.
+per_rule_ignores = { DEP001 = ["playwright"] }

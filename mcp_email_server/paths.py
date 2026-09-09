@@ -22,6 +22,8 @@ def atomic_private_write(path: Path, content: str) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=".email-", dir=path.parent)
     try:
+        if os.name == "posix":
+            os.chmod(temporary, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             stream.write(content)
             stream.flush()

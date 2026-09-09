@@ -81,7 +81,7 @@ def create_ui() -> gr.Blocks:  # noqa: C901
                     account_name = gr.Textbox(
                         label="Kontoname (optional)", placeholder="z. B. Arbeit; sonst die E-Mail-Adresse"
                     )
-                    with gr.Column(elem_id="manual-settings") as manual:
+                    with gr.Column(elem_id="manual-settings"):
                         password = gr.Textbox(
                             label="Passwort / App-Passwort",
                             type="password",
@@ -112,13 +112,26 @@ def create_ui() -> gr.Blocks:  # noqa: C901
                                 value=True, label="Gesendete E-Mails zusätzlich im IMAP-Ordner ablegen"
                             )
                             sent_folder = gr.Textbox(label="Gesendet-Ordner", placeholder="Automatisch erkennen")
-                    with gr.Column(visible=False, elem_id="provider-settings") as provider_setup:
-                        guide = gr.Markdown("", elem_id="provider-guide")
+                    with gr.Accordion("Google / Microsoft mit OAuth verbinden", open=False):
+                        gr.Markdown(
+                            "Wählen Sie oben **Google / Gmail** oder **Microsoft 365 / Outlook**. "
+                            "Die Server- und Passwortfelder werden bei OAuth nicht verwendet. "
+                            "Die folgenden Schritte richten eine eigene App Ihrer Organisation für dieses Gerät ein."
+                        )
+                        gr.Markdown(
+                            Path(__file__).with_name("google-setup.md").read_text(encoding="utf-8")
+                            + "\n\n---\n\n"
+                            + Path(__file__).with_name("microsoft-setup.md").read_text(encoding="utf-8")
+                        )
                         with gr.Accordion("App-Daten für dieses Gerät", open=True):
-                            client_id = gr.Textbox(label="Client-ID / Anwendungs-ID")
-                            client_secret = gr.Textbox(label="Google Desktop-Client-Secret", type="password")
-                            tenant = gr.Textbox(label="Microsoft-Mandant", value="common", visible=False)
-                            app_save = gr.Button("App-Einrichtung speichern")
+                            client_id = gr.Textbox(label="Client-ID / Anwendungs-ID des gewählten Anbieters")
+                            client_secret = gr.Textbox(
+                                label="Google Desktop-Client-Secret (nur Google)", type="password"
+                            )
+                            tenant = gr.Textbox(label="Microsoft-Mandant (nur Microsoft)", value="common")
+                            with gr.Row():
+                                app_load = gr.Button("Gespeicherte App-Daten laden")
+                                app_save = gr.Button("App-Einrichtung speichern")
                             app_status = gr.Markdown("")
                         gr.Markdown(
                             "Tokens bleiben im System-Schlüsselbund. Unter Linux muss dieser eingerichtet und entsperrt sein."
@@ -239,23 +252,6 @@ def create_ui() -> gr.Blocks:  # noqa: C901
         app.load(refresh, outputs=refresh_outputs, api_name=False)
         refresh_button.click(refresh, outputs=refresh_outputs, api_name=False)
 
-        def choose_provider(value: str) -> tuple[Any, ...]:
-            active = value != "manual"
-            client = load_clients().get(value, {})
-            instructions = Path(__file__).with_name(f"{value}-setup.md").read_text(encoding="utf-8") if active else ""
-            return (
-                gr.update(visible=not active),
-                gr.update(visible=active),
-                instructions,
-                client.get("client_id", ""),
-                gr.update(value=client.get("client_secret", ""), visible=value == "google"),
-                gr.update(value=client.get("tenant", "common"), visible=value == "microsoft"),
-            )
-
-        provider.change(
-            choose_provider, provider, [manual, provider_setup, guide, client_id, client_secret, tenant], api_name=False
-        )
-
         def edit(name: str | None) -> tuple[Any, ...]:
             if not name:
                 return (None, "### Postfach hinzufügen", "", *DEFAULTS)
@@ -290,12 +286,34 @@ def create_ui() -> gr.Blocks:  # noqa: C901
 
         test_button.click(test, [original, *fields], status, api_name=False)
 
+        def load_app(value: str) -> tuple[str, Any, Any, Any]:
+            if value not in {"google", "microsoft"}:
+                return "Bitte zuerst Google oder Microsoft als Anbieter wählen.", gr.skip(), gr.skip(), gr.skip()
+            client = load_clients()[value]
+            if not client.get("client_id"):
+                return "Für diesen Anbieter sind noch keine App-Daten gespeichert.", "", "", "common"
+            return (
+                "Gespeicherte App-Daten geladen. Das Client-Secret wird aus Sicherheitsgründen nicht angezeigt.",
+                client["client_id"],
+                "",
+                client.get("tenant", "common"),
+            )
+
+        app_load.click(
+            load_app,
+            provider,
+            [app_status, client_id, client_secret, tenant],
+            api_name=False,
+        )
+
         def save_app(value: str, identifier: str, secret: str, directory: str) -> str:
             try:
+                if value not in {"google", "microsoft"}:
+                    return "Bitte zuerst Google oder Microsoft als Anbieter wählen."
                 clients = load_clients()
                 google, microsoft = clients["google"], clients["microsoft"]
                 if value == "google":
-                    google = {"client_id": identifier, "client_secret": secret}
+                    google = {"client_id": identifier, "client_secret": secret or google.get("client_secret", "")}
                 elif value == "microsoft":
                     microsoft = {"client_id": identifier, "tenant": directory}
                 if not identifier.strip():

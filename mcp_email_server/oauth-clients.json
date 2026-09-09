@@ -1,4 +1,4 @@
 {
-  "google": {"client_id": "", "client_secret": ""},
-  "microsoft": {"client_id": "", "tenant": "common"}
+    "google": { "client_id": "", "client_secret": "" },
+    "microsoft": { "client_id": "", "tenant": "common" }
 }

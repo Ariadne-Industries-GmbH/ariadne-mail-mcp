@@ -29,6 +29,12 @@ Jeder Kunde richtet seine eigene Anbieter-App ein. Die Anwendung enthält keine 
 Sie fragt Ihre Freigabe im Anbieter-Browserfenster ab und speichert die OAuth-Tokens im System-Schlüsselbund.
 Ein Login ist nach drei Minuten abgelaufen und kann neu gestartet oder abgebrochen werden.
 
+Die Anbieteranleitungen bleiben in der Oberfläche kompakt eingeklappt und können bei Bedarf geöffnet werden:
+
+![Google-OAuth-Anleitung in der Einrichtung](assets/setup-google.png)
+
+![Microsoft-OAuth-Anleitung in der Einrichtung](assets/setup-microsoft.png)
+
 Der Verbindungstest prüft IMAP und SMTP getrennt, ohne eine E-Mail zu senden oder Nachrichten zu verändern.
 Nach OAuth-Anmeldung wird das Postfach erst gespeichert, wenn beide Verbindungen funktionieren.
 Bei einem vorhandenen Postfach können Sie den Absendernamen und Serverdaten bearbeiten; leere Passwortfelder
