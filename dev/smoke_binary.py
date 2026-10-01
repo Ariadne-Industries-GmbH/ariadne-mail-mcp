@@ -44,6 +44,13 @@ def main() -> None:
             os.environ.get("SYSTEMROOT", r"C:\Windows") + r"\System32" if sys.platform == "win32" else "/usr/bin:/bin"
         )
         asyncio.run(asyncio.wait_for(check_stdio(executable, directory, env), 90))
+        config = Path(directory) / "config.toml"
+        config.write_text('[[emails]]\n[emails.incoming]\npassword = "example-password"\n', encoding="utf-8")
+        reset = subprocess.run(  # noqa: S603
+            [executable, "reset", "--yes"], cwd=directory, env=env, capture_output=True, text=True, timeout=90
+        )
+        assert reset.returncode == 0, reset.stderr
+        assert not config.exists(), "Binary reset left the active config on disk"
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
@@ -66,7 +73,7 @@ def main() -> None:
                         if response.status_code == 200:
                             config = response.json()
                             assert config["title"] == "Ariadne Mail MCP"
-                            print("Binary OK: MCP handshake, tools and Gradio UI from a clean directory.")
+                            print("Binary OK: MCP handshake, tools, reset and Gradio UI from a clean directory.")
                             return
                     except httpx.HTTPError:
                         pass

@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime
 import os
 import re
-import sys
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -22,7 +21,9 @@ from mcp_email_server.paths import (
     atomic_private_write,
     get_config_path,
     get_migration_marker_path,
-    get_profile_config_path,
+    get_migration_record_path,
+    legacy_config_candidates,
+    recorded_migration_source,
 )
 
 DEFAULT_CONFIG_PATH = str(get_config_path())
@@ -445,15 +446,7 @@ def store_settings(settings: Settings | None = None) -> None:
     return
 
 
-def delete_settings() -> None:
-    """Remove known local settings and OAuth tokens without allowing legacy re-import."""
-    global _settings, _settings_signature
-    paths = [get_config_path()]
-    if getattr(sys, "frozen", False) and not os.environ.get("MCP_EMAIL_SERVER_CONFIG_PATH"):
-        profile = get_profile_config_path()
-        if profile != paths[0]:
-            paths.append(profile)
-
+def _stored_oauth_credential_ids(paths: list[Path]) -> set[str]:
     credential_ids: set[str] = set()
     for path in paths:
         if path.is_file():
@@ -463,17 +456,37 @@ def delete_settings() -> None:
                 credential_id = oauth.get("credential_id") if isinstance(oauth, dict) else None
                 if isinstance(credential_id, str) and credential_id:
                     credential_ids.add(credential_id)
+    return credential_ids
+
+
+def delete_settings() -> list[Path]:
+    """Remove known local settings and OAuth tokens without allowing legacy re-import."""
+    global _settings, _settings_signature
+    paths = [get_config_path()]
+    if not os.environ.get("MCP_EMAIL_SERVER_CONFIG_PATH"):
+        paths.extend(legacy_config_candidates())
+        recorded = recorded_migration_source()
+        if recorded:
+            paths.append(recorded)
+    paths = list(dict.fromkeys(path.absolute() for path in paths))
 
     from mcp_email_server.oauth import remove_tokens
 
-    for credential_id in credential_ids:
+    for credential_id in _stored_oauth_credential_ids(paths):
         remove_tokens(credential_id)
 
     if not os.environ.get("MCP_EMAIL_SERVER_CONFIG_PATH"):
         atomic_private_write(get_migration_marker_path(), "")
+    removed: list[Path] = []
     for path in paths:
+        clients = path.with_name("oauth-clients.json")
+        if path.exists() or clients.exists():
+            removed.append(path)
         path.unlink(missing_ok=True)
-        path.with_name("oauth-clients.json").unlink(missing_ok=True)
+        clients.unlink(missing_ok=True)
         logger.info(f"Deleted local settings beside {path}")
+    if not os.environ.get("MCP_EMAIL_SERVER_CONFIG_PATH"):
+        get_migration_record_path().unlink(missing_ok=True)
     _settings = None
     _settings_signature = None
+    return removed

@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from mcp_email_server.paths import (
     atomic_private_write,
     get_config_path,
     get_migration_marker_path,
+    get_migration_record_path,
     get_profile_config_path,
     migrate_legacy_config,
 )
@@ -166,6 +168,7 @@ def test_frozen_binary_preserves_existing_local_config(tmp_path, monkeypatch):
 
 
 def test_reset_removes_migrated_settings_and_prevents_reimport(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
     monkeypatch.delenv("MCP_EMAIL_SERVER_CONFIG_PATH")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "profile"))
     monkeypatch.setenv("APPDATA", str(tmp_path / "profile"))
@@ -175,15 +178,92 @@ def test_reset_removes_migrated_settings_and_prevents_reimport(tmp_path, monkeyp
     atomic_private_write(profile, '[[emails]]\n[emails.oauth]\ncredential_id = "stored-token"\n')
     atomic_private_write(profile.with_name("oauth-clients.json"), "{}")
     migrate_legacy_config()
+    assert get_migration_record_path().exists()
     with patch("mcp_email_server.oauth.remove_tokens") as remove_tokens:
-        delete_settings()
+        removed = delete_settings()
     remove_tokens.assert_called_once_with("stored-token")
+    assert profile in removed
     assert not profile.exists()
     assert not profile.with_name("oauth-clients.json").exists()
     assert not get_config_path().exists()
     assert not get_config_path().with_name("oauth-clients.json").exists()
     assert get_migration_marker_path().exists()
+    assert not get_migration_record_path().exists()
     assert migrate_legacy_config() is None
+
+
+def test_reset_removes_recorded_working_directory_source_after_chdir(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    monkeypatch.delenv("MCP_EMAIL_SERVER_CONFIG_PATH")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "profile"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "profile"))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "ariadne-mail-mcp"))
+    first_working_dir = tmp_path / "legacy-working-dir"
+    first_working_dir.mkdir()
+    monkeypatch.chdir(first_working_dir)
+    source = first_working_dir / "mcp_email_server" / "config.toml"
+    atomic_private_write(
+        source,
+        '[[emails]]\n[emails.incoming]\npassword = "old-password"\n[emails.oauth]\ncredential_id = "old-token"\n',
+    )
+    atomic_private_write(source.with_name("oauth-clients.json"), '{"google": {"client_id": "old-client"}}')
+    assert migrate_legacy_config() == source
+    assert get_migration_record_path().exists()
+
+    later_working_dir = tmp_path / "later-working-dir"
+    later_working_dir.mkdir()
+    monkeypatch.chdir(later_working_dir)
+    with patch("mcp_email_server.oauth.remove_tokens") as remove_tokens:
+        removed = delete_settings()
+    remove_tokens.assert_called_once_with("old-token")
+    assert source in removed
+    assert not source.exists()
+    assert not source.with_name("oauth-clients.json").exists()
+    assert not get_config_path().exists()
+    assert not get_migration_record_path().exists()
+    assert get_migration_marker_path().exists()
+
+
+def test_reset_removes_current_legacy_working_directory_without_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    monkeypatch.delenv("MCP_EMAIL_SERVER_CONFIG_PATH")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "profile"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "profile"))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "ariadne-mail-mcp"))
+    monkeypatch.chdir(tmp_path)
+    old = tmp_path / "mcp_email_server" / "config.toml"
+    atomic_private_write(old, '[[emails]]\n[emails.incoming]\npassword = "old-password"\n')
+    atomic_private_write(old.with_name("oauth-clients.json"), "{}")
+
+    removed = delete_settings()
+    assert old in removed
+    assert not old.exists()
+    assert not old.with_name("oauth-clients.json").exists()
+
+
+def test_reset_fails_closed_if_migration_record_is_invalid(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    monkeypatch.delenv("MCP_EMAIL_SERVER_CONFIG_PATH")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "profile"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "profile"))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "ariadne-mail-mcp"))
+    target = get_config_path()
+    atomic_private_write(target, '[[emails]]\n[emails.incoming]\npassword = "secret"\n')
+    atomic_private_write(get_migration_record_path(), '{"source": "/unexpected/config.toml"}')
+
+    with pytest.raises(ValueError, match="Invalid migration record"):
+        delete_settings()
+    assert target.exists()
+
+
+def test_reset_command_reports_removed_locations(tmp_path):
+    with patch("mcp_email_server.cli.delete_settings", return_value=[tmp_path / "mcp_email_server" / "config.toml"]):
+        result = CliRunner().invoke(cli_app, ["reset", "--yes"])
+    assert result.exit_code == 0
+    assert str(tmp_path / "mcp_email_server" / "config.toml") in result.stdout
 
 
 def test_reset_keeps_config_if_keyring_cleanup_fails(tmp_path, monkeypatch):
