@@ -1178,7 +1178,7 @@ cli = [
 ]
 
 [[package]]
-name = "mcp-email-server"
+name = "ariadne-mail-mcp"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [

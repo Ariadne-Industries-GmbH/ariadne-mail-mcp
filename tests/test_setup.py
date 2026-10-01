@@ -1,13 +1,22 @@
 # ruff: noqa: S105 - isolated test credentials
 import json
 import os
+import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from typer.testing import CliRunner
 
-from mcp_email_server.config import AiSendsEmailToolSettings, Settings, get_settings
+from mcp_email_server.cli import app as cli_app
+from mcp_email_server.config import AiSendsEmailToolSettings, Settings, delete_settings, get_settings
 from mcp_email_server.integrations import client_config, register_ariadne
-from mcp_email_server.paths import atomic_private_write, get_config_path, migrate_legacy_config
+from mcp_email_server.paths import (
+    atomic_private_write,
+    get_config_path,
+    get_migration_marker_path,
+    get_profile_config_path,
+    migrate_legacy_config,
+)
 from mcp_email_server.setup import DEFAULTS, FIELDS, SetupError, build_account, check_account, load_form, save_account
 
 
@@ -81,7 +90,7 @@ def test_environment_overrides_are_not_written_to_disk(monkeypatch):
     settings.store()
     assert "environment-secret" not in get_config_path().read_text()
     assert 'password = "secret"' in get_config_path().read_text()
-    with pytest.raises(SetupError, match="Umgebungsvariablen"):
+    with pytest.raises(SetupError, match="environment variables"):
         build_account(form(password=""), "work")
 
 
@@ -103,6 +112,88 @@ def test_config_follows_environment_path_and_reloads(tmp_path, monkeypatch):
     assert get_settings().enable_attachment_download
     atomic_private_write(other, "enable_attachment_download = false\n")
     assert not get_settings().enable_attachment_download
+
+
+def test_frozen_binary_uses_directory_beside_executable(tmp_path, monkeypatch):
+    monkeypatch.delenv("MCP_EMAIL_SERVER_CONFIG_PATH")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "profile"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "profile"))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "mcp-email-server"))
+    assert get_config_path() == tmp_path / "app" / "mcp_email_server" / "config.toml"
+    assert get_profile_config_path() == tmp_path / "profile" / "zerolib" / "mcp_email_server" / "config.toml"
+    monkeypatch.setenv("MCP_EMAIL_SERVER_CONFIG_PATH", str(tmp_path / "custom.toml"))
+    assert get_config_path() == tmp_path / "custom.toml"
+
+
+def test_python_install_keeps_profile_config_path(tmp_path, monkeypatch):
+    monkeypatch.delenv("MCP_EMAIL_SERVER_CONFIG_PATH")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "profile"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "profile"))
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    assert get_config_path() == get_profile_config_path()
+
+
+def test_frozen_binary_imports_profile_config_and_oauth_clients(tmp_path, monkeypatch):
+    monkeypatch.delenv("MCP_EMAIL_SERVER_CONFIG_PATH")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "profile"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "profile"))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "mcp-email-server"))
+    source = get_profile_config_path()
+    atomic_private_write(source, "enable_attachment_download = true\n")
+    atomic_private_write(source.with_name("oauth-clients.json"), '{"google": {"client_id": "app"}}')
+    assert migrate_legacy_config() == source
+    assert get_config_path().read_text() == source.read_text()
+    assert (
+        get_config_path().with_name("oauth-clients.json").read_text()
+        == source.with_name("oauth-clients.json").read_text()
+    )
+    assert source.exists()
+    assert migrate_legacy_config() is None
+
+
+def test_frozen_binary_preserves_existing_local_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("MCP_EMAIL_SERVER_CONFIG_PATH")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "profile"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "profile"))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "mcp-email-server"))
+    atomic_private_write(get_profile_config_path(), "enable_attachment_download = true\n")
+    atomic_private_write(get_config_path(), "enable_attachment_download = false\n")
+    assert migrate_legacy_config() is None
+    assert get_config_path().read_text() == "enable_attachment_download = false\n"
+
+
+def test_reset_removes_migrated_settings_and_prevents_reimport(tmp_path, monkeypatch):
+    monkeypatch.delenv("MCP_EMAIL_SERVER_CONFIG_PATH")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "profile"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "profile"))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "mcp-email-server"))
+    profile = get_profile_config_path()
+    atomic_private_write(profile, '[[emails]]\n[emails.oauth]\ncredential_id = "stored-token"\n')
+    atomic_private_write(profile.with_name("oauth-clients.json"), "{}")
+    migrate_legacy_config()
+    with patch("mcp_email_server.oauth.remove_tokens") as remove_tokens:
+        delete_settings()
+    remove_tokens.assert_called_once_with("stored-token")
+    assert not profile.exists()
+    assert not profile.with_name("oauth-clients.json").exists()
+    assert not get_config_path().exists()
+    assert not get_config_path().with_name("oauth-clients.json").exists()
+    assert get_migration_marker_path().exists()
+    assert migrate_legacy_config() is None
+
+
+def test_reset_keeps_config_if_keyring_cleanup_fails(tmp_path, monkeypatch):
+    path = get_config_path()
+    atomic_private_write(path, '[[emails]]\n[emails.oauth]\ncredential_id = "stored-token"\n')
+    with patch("mcp_email_server.oauth.remove_tokens", side_effect=RuntimeError("locked")):
+        with pytest.raises(RuntimeError, match="locked"):
+            delete_settings()
+    assert path.exists()
+    assert not get_migration_marker_path().exists()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
@@ -141,11 +232,33 @@ async def test_connection_test_reports_both_protocols_without_sending(email_sett
 
 
 def test_export_is_valid_json_with_windows_paths():
-    command = r"C:\Program Files\Mail\mcp-email-server.exe"
-    exported = json.loads(client_config(command))["mcpServers"]["email"]
+    command = r"C:\Program Files\Mail\ariadne-mail-mcp.exe"
+    document = json.loads(client_config(command))
+    assert set(document) == {"mcpServers"}
+    exported = document["mcpServers"]["ariadne-mail-mcp"]
+    assert set(exported) == {"command", "args", "env"}
     assert exported["command"] == command
     assert exported["args"] == ["stdio"]
     assert exported["env"]["MCP_EMAIL_SERVER_CONFIG_PATH"] == str(get_config_path())
+
+
+def test_cli_has_no_network_mcp_transport():
+    help_text = CliRunner().invoke(cli_app, ["--help"])
+    assert help_text.exit_code == 0
+    assert "stdio" in help_text.stdout
+    assert "sse" not in help_text.stdout
+    assert "streamable-http" not in help_text.stdout
+
+
+def test_setup_ui_binds_to_loopback_only():
+    from mcp_email_server.ui import main as ui_main
+
+    with patch("mcp_email_server.ui.migrate_legacy_config"), patch("mcp_email_server.ui.create_ui") as create_ui:
+        ui_main(port=8766, open_browser=False)
+    launch = create_ui.return_value.launch.call_args.kwargs
+    assert launch["server_name"] == "127.0.0.1"
+    assert launch["share"] is False
+    assert launch["server_port"] == 8766
 
 
 def test_ariadne_handles_wrapped_lookup_and_redacts_errors():
@@ -156,7 +269,7 @@ def test_ariadne_handles_wrapped_lookup_and_redacts_errors():
         response.is_success = True
         response.json.return_value = {"data": {"key": "existing"}}
         result = register_ariadne("token", "https://engine.example/api", "email", "/mail", "", "")
-        assert "aktualisiert" in result
+        assert "updated" in result
         request = client.post.call_args.kwargs["json"]
         assert request["thread_name"] == "update-mcp-server-spec"
         assert request["payload"]["path_params"] == {"key": "existing"}

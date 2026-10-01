@@ -1,14 +1,14 @@
-### Microsoft-App einmalig einrichten
+### Set up your Microsoft app once
 
-Sie benötigen Zugriff auf einen Entra-Mandanten; bei Organisationsbeschränkungen unterstützt Sie Ihre Administration.
+You need access to a Microsoft Entra tenant. Your administrator may need to help with organization restrictions.
 
-1. Öffnen Sie [Microsoft Entra](https://entra.microsoft.com/), dann **Identität → Anwendungen → App-Registrierungen → Neue Registrierung**.
-2. Wählen Sie einen Namen und den Kontotyp: eigene Organisation oder – für persönliche Outlook-Adressen – Organisationsverzeichnisse **und persönliche Microsoft-Konten**.
-3. Richten Sie unter **Authentifizierung** eine **Desktop-/Mobil-Plattform** mit `http://localhost/` ein. Der Login verwendet einen freien lokalen Port, den Microsoft bei dieser Loopback-Adresse beim Abgleich ignoriert. Kein Web-/SPA-Client oder Client-Secret.
-4. Ergänzen Sie unter **API-Berechtigungen → Office 365 Exchange Online → Delegierte Berechtigungen**: `IMAP.AccessAsUser.All` und `SMTP.Send`. Die Anmeldung fordert auch `offline_access` an. Lassen Sie gegebenenfalls Administratorzustimmung erteilen.
-5. Kopieren Sie die **Anwendungs-ID (Client)** unten. Bei einer App für einen Mandanten tragen Sie dessen **Verzeichnis-ID** ein; sonst kann bei passendem Kontotyp `common` stehen bleiben. Speichern Sie.
-6. Klicken Sie auf „Beim Anbieter anmelden“, öffnen Sie den Link und erlauben Sie den Zugriff mit Ihrem Postfachkonto.
+1. Open [Microsoft Entra](https://entra.microsoft.com/) and go to **Identity → Applications → App registrations → New registration**.
+2. Choose a name and supported account types. For personal Outlook addresses, include **personal Microsoft accounts**.
+3. Under **Authentication**, add a **Mobile and desktop applications** platform with `http://localhost/`. Sign-in uses an available local port; Microsoft ignores the port when matching this loopback redirect. Do not use a Web/SPA client or client secret.
+4. Under **API permissions → Office 365 Exchange Online → Delegated permissions**, add `IMAP.AccessAsUser.All` and `SMTP.Send`. Sign-in also requests `offline_access`. Obtain administrator consent if required.
+5. Copy the **Application (client) ID** below. For a single-tenant app, enter its **Directory (tenant) ID**; otherwise `common` may be used when supported by the selected account types. Save the settings.
+6. Select **Sign in with provider**, open the link, and grant access using your mailbox account.
 
-**Verbindung fehlgeschlagen?** IMAP und SMTP AUTH müssen für das Postfach erlaubt sein. Organisationsrichtlinien können sie sperren. Der Verbindungstest zeigt beide Ergebnisse getrennt.
+**Connection failed?** IMAP and SMTP AUTH must be allowed for the mailbox. Organization policies can disable them. The connection test reports IMAP and SMTP separately.
 
-[Microsoft: OAuth für IMAP/SMTP](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth) · [Loopback-Adressen](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url)
+[Microsoft IMAP/SMTP OAuth](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth) · [Loopback redirect URIs](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url)

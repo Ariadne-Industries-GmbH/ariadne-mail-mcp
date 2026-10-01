@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -17,7 +18,12 @@ from pydantic_settings import (
 )
 
 from mcp_email_server.log import logger
-from mcp_email_server.paths import atomic_private_write, get_config_path
+from mcp_email_server.paths import (
+    atomic_private_write,
+    get_config_path,
+    get_migration_marker_path,
+    get_profile_config_path,
+)
 
 DEFAULT_CONFIG_PATH = str(get_config_path())
 
@@ -440,12 +446,34 @@ def store_settings(settings: Settings | None = None) -> None:
 
 
 def delete_settings() -> None:
+    """Remove known local settings and OAuth tokens without allowing legacy re-import."""
     global _settings, _settings_signature
+    paths = [get_config_path()]
+    if getattr(sys, "frozen", False) and not os.environ.get("MCP_EMAIL_SERVER_CONFIG_PATH"):
+        profile = get_profile_config_path()
+        if profile != paths[0]:
+            paths.append(profile)
+
+    credential_ids: set[str] = set()
+    for path in paths:
+        if path.is_file():
+            stored = TomlConfigSettingsSource(Settings, toml_file=path)()
+            for email in stored.get("emails", []):
+                oauth = email.get("oauth") if isinstance(email, dict) else None
+                credential_id = oauth.get("credential_id") if isinstance(oauth, dict) else None
+                if isinstance(credential_id, str) and credential_id:
+                    credential_ids.add(credential_id)
+
+    from mcp_email_server.oauth import remove_tokens
+
+    for credential_id in credential_ids:
+        remove_tokens(credential_id)
+
+    if not os.environ.get("MCP_EMAIL_SERVER_CONFIG_PATH"):
+        atomic_private_write(get_migration_marker_path(), "")
+    for path in paths:
+        path.unlink(missing_ok=True)
+        path.with_name("oauth-clients.json").unlink(missing_ok=True)
+        logger.info(f"Deleted local settings beside {path}")
     _settings = None
     _settings_signature = None
-    path = get_config_path()
-    if not path.exists():
-        logger.info(f"Settings file {path} does not exist")
-        return
-    path.unlink()
-    logger.info(f"Deleted settings file {path}")

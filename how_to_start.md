@@ -1,37 +1,17 @@
-# How To Start The Server
+# Start Ariadne Mail MCP
 
-## Install
+For user setup, use the [full guide](docs/user-setup.md).
 
-- Quick run: `uvx mcp-email-server@latest ui`
-- Or: `pip install mcp-email-server` then use `mcp-email-server`
+## Native binary
 
-## Configure An Account (UI)
+Extract the release archive and start `ariadne-mail-mcp.exe` on Windows or `./ariadne-mail-mcp` on Linux. The setup UI opens on `127.0.0.1`. Configure a mailbox, then copy the local MCP entry from **Connect to Ariadne** into Ariadne Engine's `mcp_servers.json`. See the [configuration reference](docs/configuration.md) for direct TOML setup.
 
-- Run `mcp-email-server` with no arguments (or `mcp-email-server ui`) to open the UI.
-- Enter IMAP/SMTP settings and Save.
-- Config path controlled by `MCP_EMAIL_SERVER_CONFIG_PATH`.
-  - Default: `./mcp_email_server/config.toml`
-  - Recommended: `MCP_EMAIL_SERVER_CONFIG_PATH=~/.config/zerolib/mcp_email_server/config.toml`
-- Reset config: `mcp-email-server reset`
+## Python development install
 
-## Configure Via Environment (optional)
+```sh
+uv sync --locked
+uv run ariadne-mail-mcp ui
+uv run ariadne-mail-mcp stdio
+```
 
-- You can skip the UI by setting env vars (e.g., `MCP_EMAIL_SERVER_EMAIL_ADDRESS`, `MCP_EMAIL_SERVER_IMAP_HOST`, `MCP_EMAIL_SERVER_SMTP_HOST`, etc.).
-- Environment variables override the TOML file. See README for the full list.
-
-## Start The MCP Server
-
-- Stdio: `mcp-email-server stdio`
-- SSE: `mcp-email-server sse --host localhost --port 9557`
-- The installed script and the packaged binary behave the same; running with no flags opens the UI by default.
-
-## Email Sending Safety
-
-- Sending is disabled by default. Enable explicitly if needed:
-  - `export MCP_EMAIL_SERVER_ENABLE_SENDING=true` (also accepts `1/yes/on`)
-- If disabled, the `send_email` tool raises a permission error.
-
-## Notes
-
-- Provider accounts (API-based) are not supported yet; use classic IMAP/SMTP accounts.
-- For client integration (e.g., Claude Desktop), see README examples for MCP configuration.
+Running without arguments opens the setup UI. Only stdio is available for MCP. Run `ariadne-mail-mcp config-path` to inspect the active settings path and `ariadne-mail-mcp reset` to remove local account settings and stored OAuth tokens.

@@ -21,14 +21,14 @@ else:
 
 def get_endpoint_path() -> str:
     """
-    Find the path to the mcp-email-server script.
+    Find the path to the ariadne-mail-mcp script.
     Similar to the 'which' command in Unix-like systems.
 
     Returns:
-        str: The full path to the mcp-email-server script
+        str: The full path to the ariadne-mail-mcp script
     """
     # First try using shutil.which to find the script in PATH
-    script_path = shutil.which("mcp-email-server")
+    script_path = shutil.which("ariadne-mail-mcp")
     if script_path:
         return script_path
 
@@ -36,8 +36,8 @@ def get_endpoint_path() -> str:
     # This handles cases where the script is installed but not in PATH
     bin_dir = Path(sys.executable).parent
     possible_paths = [
-        bin_dir / "mcp-email-server",
-        bin_dir / "mcp-email-server.exe",  # For Windows
+        bin_dir / "ariadne-mail-mcp",
+        bin_dir / "ariadne-mail-mcp.exe",  # For Windows
     ]
 
     for path in possible_paths:
@@ -45,7 +45,7 @@ def get_endpoint_path() -> str:
             return str(path)
 
     # If we can't find it, return the script name and hope it's in PATH when executed
-    return "mcp-email-server"
+    return "ariadne-mail-mcp"
 
 
 def install_claude_desktop():
@@ -86,8 +86,8 @@ def uninstall_claude_desktop():
     if "mcpServers" not in existing_config:
         return
 
-    if "zerolib-email" in existing_config["mcpServers"]:
-        del existing_config["mcpServers"]["zerolib-email"]
+    if "ariadne-mail-mcp" in existing_config["mcpServers"]:
+        del existing_config["mcpServers"]["ariadne-mail-mcp"]
 
     with open(CLAUDE_DESKTOP_CONFIG_PATH, "w") as f:
         json.dump(existing_config, f, indent=4)
@@ -107,7 +107,7 @@ def is_installed() -> bool:
         with open(CLAUDE_DESKTOP_CONFIG_PATH) as f:
             config = json.load(f)
 
-        return "mcpServers" in config and "zerolib-email" in config["mcpServers"]
+        return "mcpServers" in config and "ariadne-mail-mcp" in config["mcpServers"]
     except (FileNotFoundError, json.JSONDecodeError):
         return False
 
@@ -133,8 +133,8 @@ def need_update() -> bool:
             installed_config = json.load(f)
 
         # Compare the relevant parts of the configs
-        template_server = template_config["mcpServers"]["zerolib-email"]
-        installed_server = installed_config["mcpServers"]["zerolib-email"]
+        template_server = template_config["mcpServers"]["ariadne-mail-mcp"]
+        installed_server = installed_config["mcpServers"]["ariadne-mail-mcp"]
 
         # Check if any key configuration elements differ
         return (

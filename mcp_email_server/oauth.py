@@ -45,7 +45,7 @@ def load_clients() -> dict[str, dict[str, str]]:
                 for provider in clients:
                     clients[provider].update(data.get(provider, {}))
             except (ValueError, TypeError, AttributeError):
-                raise LoginError("Die OAuth-App-Konfiguration ist ungültig. Bitte die Einrichtung prüfen.") from None
+                raise LoginError("The OAuth app configuration is invalid. Check the setup.") from None
     for provider, values in clients.items():
         for field in ("client_id", "client_secret", "tenant"):
             value = os.getenv(f"MCP_EMAIL_SERVER_{provider.upper()}_{field.upper()}")
@@ -69,8 +69,8 @@ def _read_tokens(credential_id: str) -> dict[str, Any]:
         if raw:
             return json.loads(raw)
     except Exception:
-        raise LoginError("Der System-Schlüsselbund ist nicht verfügbar oder gesperrt. Bitte entsperren.") from None
-    raise LoginError("Die Anmeldung fehlt. Bitte das Konto erneut beim Anbieter verbinden.")
+        raise LoginError("The system keyring is unavailable or locked. Unlock it and try again.") from None
+    raise LoginError("Sign-in credentials are missing. Reconnect the account with the provider.")
 
 
 def _write_tokens(credential_id: str, tokens: dict[str, Any]) -> None:
@@ -78,8 +78,8 @@ def _write_tokens(credential_id: str, tokens: dict[str, Any]) -> None:
         keyring.set_password(SERVICE, credential_id, json.dumps(tokens))
     except Exception:
         raise LoginError(
-            "Die Anmeldung konnte nicht im System-Schlüsselbund gespeichert werden. "
-            "Unter Linux wird ein entsperrter Secret-Service-Schlüsselbund benötigt."
+            "Sign-in credentials could not be saved to the system keyring. "
+            "On Linux, an unlocked Secret Service keyring is required."
         ) from None
 
 
@@ -89,7 +89,7 @@ def remove_tokens(credential_id: str) -> None:
     except keyring.errors.PasswordDeleteError:
         pass
     except Exception:
-        raise LoginError("Anmeldedaten konnten nicht aus dem System-Schlüsselbund entfernt werden.") from None
+        raise LoginError("Credentials could not be removed from the system keyring.") from None
 
 
 def endpoints(account: OAuthAccount) -> tuple[str, str]:
@@ -106,16 +106,14 @@ def _exchange(account: OAuthAccount, data: dict[str, str], client_secret: str = 
     try:
         response = httpx.post(endpoints(account)[1], data=data, timeout=20)
         if response.status_code != 200:
-            raise LoginError(
-                "Anmeldung abgelaufen oder nicht freigegeben. Bitte erneut verbinden und App-Freigabe prüfen."
-            )
+            raise LoginError("Sign-in expired or was not approved. Reconnect and check the app permissions.")
         result = response.json()
         if not isinstance(result.get("access_token"), str) or not result["access_token"]:
             raise ValueError  # noqa: TRY301 - normalize provider failures at this boundary
         result["expires_at"] = time.time() + float(result.get("expires_in", 3600))
         return result
     except (httpx.HTTPError, ValueError, TypeError, AttributeError):
-        raise LoginError("Der Anmeldedienst ist nicht erreichbar oder liefert eine ungültige Antwort.") from None
+        raise LoginError("The sign-in service is unavailable or returned an invalid response.") from None
 
 
 def _access_token(account: OAuthAccount) -> str:
@@ -123,7 +121,7 @@ def _access_token(account: OAuthAccount) -> str:
     if tokens.get("access_token") and tokens.get("expires_at", 0) > time.time() + 60:
         return tokens["access_token"]
     if not tokens.get("refresh_token"):
-        raise LoginError("Bitte das Konto erneut verbinden, um den Zugriff zu verlängern.")
+        raise LoginError("Reconnect the account to renew access.")
     renewed = _exchange(
         account,
         {
@@ -147,12 +145,10 @@ class PendingLogin:
 
     def __init__(self, provider: str, email_address: str):
         if provider not in SCOPES:
-            raise LoginError("Unbekannter Anbieter.")
+            raise LoginError("Unknown provider.")
         client = load_clients()[provider]
         if not client.get("client_id"):
-            raise LoginError(
-                "Dieser Anbieter ist noch nicht eingerichtet. Bitte unter Einrichtung die OAuth-App hinterlegen."
-            )
+            raise LoginError("This provider is not configured yet. Enter its OAuth app details in setup first.")
         self.account = OAuthAccount(
             provider=provider,
             client_id=client["client_id"],
@@ -181,14 +177,14 @@ class PendingLogin:
                     return
                 pending.code = values.get("code", [None])[0]
                 if values.get("error") or not pending.code:
-                    pending.error = "Die Anmeldung wurde abgebrochen oder nicht freigegeben."
+                    pending.error = "Sign-in was cancelled or not approved."
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(
-                    "<html lang='de'><title>E-Mail verbinden</title><h1>Zurück zur Einrichtung</h1>"
-                    "<p>Dieses Fenster kann geschlossen werden.</p></html>".encode()
+                    b"<html lang='en'><title>Connect email</title><h1>Return to setup</h1>"
+                    b"<p>You can close this window.</p></html>"
                 )
                 pending.done.set()
 
@@ -220,20 +216,20 @@ class PendingLogin:
         finally:
             self.server.server_close()
             if not self.done.is_set():
-                self.error = "Die Anmeldung ist abgelaufen. Bitte erneut starten."
+                self.error = "Sign-in timed out. Start again."
                 self.done.set()
 
     def cancel(self) -> None:
-        self.error = "Anmeldung abgebrochen."
+        self.error = "Sign-in cancelled."
         self.done.set()
 
     def finish(self) -> OAuthAccount:
         if not self.done.is_set():
-            raise LoginError("Bitte die Anmeldung im Browser abschließen.")
+            raise LoginError("Complete sign-in in the browser.")
         if self.error:
             raise LoginError(self.error)
         if not self.code:
-            raise LoginError("Diese Anmeldung wurde bereits verwendet.")
+            raise LoginError("This sign-in has already been used.")
         code, self.code = self.code, None
         tokens = _exchange(
             self.account,
@@ -246,7 +242,7 @@ class PendingLogin:
             self.client_secret,
         )
         if not tokens.get("refresh_token"):
-            raise LoginError("Keine dauerhafte Freigabe erhalten. Bitte erneut mit Offline-Zugriff verbinden.")
+            raise LoginError("Persistent access was not granted. Reconnect with offline access.")
         tokens["client_secret"] = self.client_secret
         _write_tokens(self.account.credential_id, tokens)
         return self.account

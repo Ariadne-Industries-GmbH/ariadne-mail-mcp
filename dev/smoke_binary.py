@@ -65,7 +65,7 @@ def main() -> None:
                         response = httpx.get(f"http://127.0.0.1:{port}/config", timeout=2)
                         if response.status_code == 200:
                             config = response.json()
-                            assert config["title"] == "E-Mail verbinden"
+                            assert config["title"] == "Ariadne Mail MCP"
                             print("Binary OK: MCP handshake, tools and Gradio UI from a clean directory.")
                             return
                     except httpx.HTTPError:

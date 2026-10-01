@@ -46,8 +46,8 @@ def _message(error: Exception) -> str:
     if isinstance(error, (SetupError, LoginError)):
         return html.escape(str(error))
     if isinstance(error, OSError):
-        return "Die Einstellungen konnten nicht gespeichert werden. Speicherort und Schreibrechte prüfen."
-    return "Bitte die Eingaben prüfen. Die Einstellungen wurden nicht übernommen."
+        return "Settings could not be saved. Check the location and write permissions."
+    return "Check your input. Settings were not changed."
 
 
 def _connection_report(results: list[tuple[str, bool, str]]) -> str:
@@ -58,152 +58,143 @@ def _connection_report(results: list[tuple[str, bool, str]]) -> str:
 
 def create_ui() -> gr.Blocks:  # noqa: C901
     pending_logins: dict[str, PendingLogin] = {}
-    with gr.Blocks(title="E-Mail verbinden", analytics_enabled=False) as app:
+    with gr.Blocks(title="Ariadne Mail MCP", analytics_enabled=False) as app:
         gr.Markdown(
-            "# Ihre E-Mails. Mit Ihrer KI.\nPostfächer verbinden, Zugriffe festlegen und den MCP einrichten.",
+            "# Ariadne Mail MCP\nConnect your mailboxes, set permissions, and configure the local MCP server.",
             elem_id="intro",
         )
-        summary = gr.Markdown("Konten werden geladen …", elem_classes="account-summary")
+        summary = gr.Markdown("Loading accounts…", elem_classes="account-summary")
         original = gr.State(None)
         with gr.Tabs():
-            with gr.Tab("Postfächer"):
+            with gr.Tab("Mailboxes"):
                 with gr.Row():
-                    selected = gr.Dropdown(label="Postfach auswählen", choices=[], interactive=True, scale=3)
-                    new_button = gr.Button("+ Postfach hinzufügen", scale=1)
-                    refresh_button = gr.Button("Aktualisieren", scale=1)
-                edit_button = gr.Button("Ausgewähltes Postfach bearbeiten")
+                    selected = gr.Dropdown(label="Select mailbox", choices=[], interactive=True, scale=3)
+                    new_button = gr.Button("+ Add mailbox", scale=1)
+                    refresh_button = gr.Button("Refresh", scale=1)
+                edit_button = gr.Button("Edit selected mailbox")
                 with gr.Group():
-                    form_title = gr.Markdown("### Postfach hinzufügen")
-                    provider = gr.Radio(PROVIDERS, value="manual", label="Wie möchten Sie sich verbinden?")
+                    form_title = gr.Markdown("### Add mailbox")
+                    provider = gr.Radio(PROVIDERS, value="manual", label="How would you like to connect?")
                     with gr.Row():
-                        address = gr.Textbox(label="E-Mail-Adresse", placeholder="name@firma.de")
-                        full_name = gr.Textbox(label="Absendername", placeholder="Vorname Nachname")
+                        address = gr.Textbox(label="Email address", placeholder="name@example.com")
+                        full_name = gr.Textbox(label="Sender name", placeholder="First Last")
                     account_name = gr.Textbox(
-                        label="Kontoname (optional)", placeholder="z. B. Arbeit; sonst die E-Mail-Adresse"
+                        label="Account name (optional)", placeholder="For example, Work; defaults to the email address"
                     )
                     with gr.Column(elem_id="manual-settings"):
                         password = gr.Textbox(
-                            label="Passwort / App-Passwort",
+                            label="Password / app password",
                             type="password",
-                            placeholder="Beim Bearbeiten leer lassen, um es beizubehalten",
+                            placeholder="Leave blank when editing to keep the saved password",
                         )
                         with gr.Row():
-                            imap_host = gr.Textbox(label="Posteingangsserver (IMAP)", placeholder="imap.firma.de")
-                            smtp_host = gr.Textbox(label="Postausgangsserver (SMTP)", placeholder="smtp.firma.de")
-                        with gr.Accordion("Erweiterte Servereinstellungen", open=False):
-                            user_name = gr.Textbox(label="Anmeldename", placeholder="Standard: E-Mail-Adresse")
+                            imap_host = gr.Textbox(label="Incoming server (IMAP)", placeholder="imap.example.com")
+                            smtp_host = gr.Textbox(label="Outgoing server (SMTP)", placeholder="smtp.example.com")
+                        with gr.Accordion("Advanced server settings", open=False):
+                            user_name = gr.Textbox(label="Login name", placeholder="Defaults to email address")
                             with gr.Row():
-                                imap_port = gr.Number(label="IMAP-Port", value=993, precision=0)
-                                imap_security = gr.Dropdown([TLS, PLAIN], value=TLS, label="IMAP-Verschlüsselung")
-                                smtp_port = gr.Number(label="SMTP-Port", value=465, precision=0)
-                                smtp_security = gr.Dropdown(
-                                    [TLS, STARTTLS, PLAIN], value=TLS, label="SMTP-Verschlüsselung"
-                                )
+                                imap_port = gr.Number(label="IMAP port", value=993, precision=0)
+                                imap_security = gr.Dropdown([TLS, PLAIN], value=TLS, label="IMAP encryption")
+                                smtp_port = gr.Number(label="SMTP port", value=465, precision=0)
+                                smtp_security = gr.Dropdown([TLS, STARTTLS, PLAIN], value=TLS, label="SMTP encryption")
                             gr.Markdown(
-                                "SMTP: üblicherweise 465 mit SSL/TLS oder 587 mit STARTTLS. Unverschlüsselte Verbindungen übertragen Zugangsdaten ohne Transportschutz."
+                                "SMTP normally uses port 465 with SSL/TLS or 587 with STARTTLS. Unencrypted connections expose credentials in transit."
                             )
                             with gr.Row():
-                                imap_user = gr.Textbox(label="Abweichender IMAP-Anmeldename")
-                                imap_password = gr.Textbox(label="Abweichendes IMAP-Passwort", type="password")
+                                imap_user = gr.Textbox(label="Separate IMAP login name")
+                                imap_password = gr.Textbox(label="Separate IMAP password", type="password")
                             with gr.Row():
-                                smtp_user = gr.Textbox(label="Abweichender SMTP-Anmeldename")
-                                smtp_password = gr.Textbox(label="Abweichendes SMTP-Passwort", type="password")
-                            save_sent = gr.Checkbox(
-                                value=True, label="Gesendete E-Mails zusätzlich im IMAP-Ordner ablegen"
-                            )
-                            sent_folder = gr.Textbox(label="Gesendet-Ordner", placeholder="Automatisch erkennen")
-                    with gr.Accordion("Google / Microsoft mit OAuth verbinden", open=False):
+                                smtp_user = gr.Textbox(label="Separate SMTP login name")
+                                smtp_password = gr.Textbox(label="Separate SMTP password", type="password")
+                            save_sent = gr.Checkbox(value=True, label="Also save sent email in an IMAP folder")
+                            sent_folder = gr.Textbox(label="Sent folder", placeholder="Detect automatically")
+                    with gr.Accordion("Connect Google / Microsoft with OAuth", open=False):
                         gr.Markdown(
-                            "Wählen Sie oben **Google / Gmail** oder **Microsoft 365 / Outlook**. "
-                            "Die Server- und Passwortfelder werden bei OAuth nicht verwendet. "
-                            "Die folgenden Schritte richten eine eigene App Ihrer Organisation für dieses Gerät ein."
+                            "Select **Google / Gmail** or **Microsoft 365 / Outlook** above. "
+                            "Server and password fields are not used for OAuth. "
+                            "The steps below register your organization's own app for this device."
                         )
                         gr.Markdown(
                             Path(__file__).with_name("google-setup.md").read_text(encoding="utf-8")
                             + "\n\n---\n\n"
                             + Path(__file__).with_name("microsoft-setup.md").read_text(encoding="utf-8")
                         )
-                        with gr.Accordion("App-Daten für dieses Gerät", open=True):
-                            client_id = gr.Textbox(label="Client-ID / Anwendungs-ID des gewählten Anbieters")
+                        with gr.Accordion("App details for this device", open=True):
+                            client_id = gr.Textbox(label="Client ID / application ID for the selected provider")
                             client_secret = gr.Textbox(
-                                label="Google Desktop-Client-Secret (nur Google)", type="password"
+                                label="Google desktop client secret (Google only)", type="password"
                             )
-                            tenant = gr.Textbox(label="Microsoft-Mandant (nur Microsoft)", value="common")
+                            tenant = gr.Textbox(label="Microsoft tenant (Microsoft only)", value="common")
                             with gr.Row():
-                                app_load = gr.Button("Gespeicherte App-Daten laden")
-                                app_save = gr.Button("App-Einrichtung speichern")
+                                app_load = gr.Button("Load saved app details")
+                                app_save = gr.Button("Save app setup")
                             app_status = gr.Markdown("")
-                        gr.Markdown(
-                            "Tokens bleiben im System-Schlüsselbund. Unter Linux muss dieser eingerichtet und entsperrt sein."
-                        )
+                        gr.Markdown("Tokens stay in the system keyring. On Linux, it must be configured and unlocked.")
                         with gr.Row():
-                            login_button = gr.Button("Beim Anbieter anmelden", variant="primary")
-                            cancel_login = gr.Button("Anmeldung abbrechen")
+                            login_button = gr.Button("Sign in with provider", variant="primary")
+                            cancel_login = gr.Button("Cancel sign-in")
                         login_status = gr.Markdown("")
                     status = gr.Markdown("")
                     with gr.Row():
-                        test_button = gr.Button("Verbindung testen")
-                        save_button = gr.Button("Postfach speichern", variant="primary")
-                    gr.Markdown(
-                        "Der Verbindungstest meldet sich nur an. Er versendet keine E-Mails und verändert keine Nachrichten."
-                    )
-                with gr.Accordion("Postfach entfernen", open=False):
-                    confirm_delete = gr.Checkbox(
-                        label="Ich möchte das ausgewählte Postfach aus dieser Anwendung entfernen."
-                    )
-                    delete_button = gr.Button("Ausgewähltes Postfach entfernen", variant="stop")
+                        test_button = gr.Button("Test connection")
+                        save_button = gr.Button("Save mailbox", variant="primary")
+                    gr.Markdown("The connection test only signs in. It does not send email or change messages.")
+                with gr.Accordion("Remove mailbox", open=False):
+                    confirm_delete = gr.Checkbox(label="I want to remove the selected mailbox from this application.")
+                    delete_button = gr.Button("Remove selected mailbox", variant="stop")
                     delete_status = gr.Markdown("")
                     gr.Markdown(
-                        "E-Mails beim Anbieter bleiben erhalten. Eine Versandfreigabe für dieses Konto wird entfernt."
+                        "Email at the provider remains unchanged. Any local sending permission for this account is removed."
                     )
-            with gr.Tab("Freigaben"):
+            with gr.Tab("Permissions"):
                 gr.Markdown(
-                    "### Versand gezielt erlauben\nDie KI kann nur über das hier gewählte Konto an freigegebene Adressen senden. Ohne Konto und Empfänger bleibt dieser Versand gesperrt."
+                    "### Allow restricted sending\nThe AI can send only from the selected account to approved recipients. Sending stays disabled until an account and recipients are selected."
                 )
-                allowed_account = gr.Dropdown(label="Konto für eingeschränkten Versand", choices=[], interactive=True)
-                recipients = gr.Textbox(label="Freigegebene Empfänger", lines=4, placeholder="Eine Adresse pro Zeile")
-                download = gr.Checkbox(label="Herunterladen von Anhängen auf diesen Rechner erlauben", value=False)
+                allowed_account = gr.Dropdown(label="Account for restricted sending", choices=[], interactive=True)
+                recipients = gr.Textbox(label="Approved recipients", lines=4, placeholder="One address per line")
+                download = gr.Checkbox(label="Allow downloading attachments to this computer", value=False)
                 gr.Markdown(
-                    "Lesen, Verschieben und Markieren bleiben verfügbar. Allgemeiner Versand und Löschen sind weiterhin nicht als MCP-Werkzeuge freigeschaltet."
+                    "Reading, moving, and marking messages remain available. Unrestricted sending and deletion are not exposed as MCP tools."
                 )
                 with gr.Row():
-                    permission_save = gr.Button("Freigaben speichern", variant="primary")
-                    permission_clear = gr.Button("Versandfreigabe entfernen")
+                    permission_save = gr.Button("Save permissions", variant="primary")
+                    permission_clear = gr.Button("Remove sending permission")
                 permission_status = gr.Markdown("")
-            with gr.Tab("Mit KI verbinden"):
+            with gr.Tab("Connect to Ariadne"):
                 gr.Markdown(
-                    "### MCP-Client einrichten\nWählen Sie in Ihrem KI-Client einen lokalen MCP-Server. Verwenden Sie das Programm mit dem Argument `stdio`. Der Client startet den MCP bei Bedarf selbst."
+                    "### Ariadne Engine MCP setup\nCopy this entry into Ariadne Engine's `mcp_servers.json` next to `model_config.json`. Keep existing `mcpServers` entries. Ariadne starts this program locally with `stdio` when needed."
                 )
-                executable = gr.Textbox(label="Pfad zum Programm", value=command_path())
+                executable = gr.Textbox(label="Program path", value=command_path())
                 config_preview = gr.Code(
-                    label="MCP-Konfiguration kopieren",
+                    label="Copy Ariadne `mcp_servers.json` entry",
                     language="json",
                     value=client_config(command_path()),
                     interactive=False,
                 )
                 gr.Markdown(
-                    "Für Clients mit `mcpServers`-Konfiguration, beispielsweise Claude Desktop. Andere Clients können dieselben Werte über eigene Eingabefelder übernehmen. Bestehende Servereinträge beibehalten. Auf einem anderen Rechner dessen Programm- und Konfigurationspfade verwenden."
+                    "The output uses the Claude-compatible `mcpServers` format supported by Ariadne Engine and other MCP clients. If the Engine runs on another computer, install and configure this program there and use that computer's paths. [Ariadne Engine MCP documentation](https://github.com/Ariadne-Industries-GmbH/Ariadne-Engine/blob/main/README.md)."
                 )
-                with gr.Accordion("Mit Ariadne Engine verbinden", open=False):
+                with gr.Accordion("Register through the Ariadne Engine API (optional)", open=False):
                     gr.Markdown(
-                        "Ariadne startet das Programm auf dem Engine-Rechner. Der Pfad und die Kontokonfiguration müssen dort verfügbar sein."
+                        "Ariadne starts the program on the Engine computer. The program path and account configuration must be available there."
                     )
-                    endpoint = gr.Textbox(label="Engine-Endpunkt", placeholder="https://ihre-engine.example/…")
-                    api_key = gr.Textbox(label="Engine-API-Schlüssel", type="password")
-                    spec_name = gr.Textbox(label="Name in Ariadne", value="mcp-email-server")
-                    engine_command = gr.Textbox(label="Programmpfad auf dem Engine-Rechner", value=command_path())
-                    tags = gr.Textbox(label="Tags (optional, durch Kommas getrennt)")
-                    description = gr.Textbox(label="Beschreibung (optional)")
-                    register = gr.Button("In Ariadne registrieren / aktualisieren")
-                    engine_status = gr.Textbox(label="Ergebnis", interactive=False)
-            with gr.Tab("Speicher & Hilfe"):
+                    endpoint = gr.Textbox(label="Engine endpoint", placeholder="https://your-engine.example/…")
+                    api_key = gr.Textbox(label="Engine API key", type="password")
+                    spec_name = gr.Textbox(label="Name in Ariadne", value="ariadne-mail-mcp")
+                    engine_command = gr.Textbox(label="Program path on the Engine computer", value=command_path())
+                    tags = gr.Textbox(label="Tags (optional, comma-separated)")
+                    description = gr.Textbox(label="Description (optional)")
+                    register = gr.Button("Register / update in Ariadne")
+                    engine_status = gr.Textbox(label="Result", interactive=False)
+            with gr.Tab("Storage & help"):
                 gr.Markdown(
-                    "### Ihre Konfiguration\nSpeicherort: `" + str(get_config_path()) + "`\n\n"
-                    "IMAP-/SMTP-Passwörter liegen in dieser lokalen Datei. Unter Linux sind neue Dateien nur für Ihren Benutzer zugänglich; unter Windows gelten die Rechte Ihres Benutzerprofils. OAuth-Tokens liegen im System-Schlüsselbund.\n\n"
-                    "**Umgebungsvariablen:** Vorgaben einer verwalteten Installation haben Vorrang. Solche Konten werden gekennzeichnet und lassen sich hier nicht überschreiben.\n\n"
-                    "**Verbindungsprobleme:** Server, Passwort, Verschlüsselung und Anbieter-Freigaben prüfen. Die Anleitungen für Google und Microsoft finden Sie bei der Anbieterauswahl.\n\n"
-                    "**Linux-Schlüsselbund:** Für OAuth benötigen Sie einen Secret-Service-Dienst (etwa GNOME-Schlüsselbund oder entsprechend eingerichtetes KWallet), eine D-Bus-Benutzersitzung und einen entsperrten Schlüsselbund.\n\n"
-                    "**Änderungen:** Laufende MCP-Prozesse laden geänderte Kontoeinstellungen beim nächsten Werkzeugaufruf. Nach Änderungen an der Client-Konfiguration den MCP im KI-Client neu starten."
+                    "### Your configuration\nLocation: `" + str(get_config_path()) + "`\n\n"
+                    "IMAP/SMTP passwords are stored in this local file. New files on Linux are accessible only to your user; on Windows, access depends on the selected folder's permissions. OAuth tokens are stored in the system keyring.\n\n"
+                    "**Environment variables:** Managed settings take precedence. Managed accounts are marked and cannot be overwritten here.\n\n"
+                    "**Connection issues:** Check the server, password, encryption, and provider permissions. Google and Microsoft setup guides appear when you select a provider.\n\n"
+                    "**Linux keyring:** OAuth requires a Secret Service provider (such as GNOME Keyring or a configured KWallet), a user D-Bus session, and an unlocked keyring.\n\n"
+                    "**Direct TOML editing:** See `docs/configuration.md` in the release archive for an example, every setting, and the sending permissions.\n\n"
+                    "**Changes:** Running MCP processes load changed account settings on the next tool call. Restart the MCP in your AI client after changing its client configuration."
                 )
         fields = [
             account_name,
@@ -231,12 +222,12 @@ def create_ui() -> gr.Blocks:  # noqa: C901
             names = [e.account_name for e in settings.emails]
             managed = [name for name in names if env_managed(name)]
             text = (
-                f"**{len(names)} Postfach/Postfächer eingerichtet.**"
+                f"**{len(names)} mailbox(es) configured.**"
                 if names
-                else "**Willkommen.** Verbinden Sie Ihr erstes Postfach, um loszulegen."
+                else "**Welcome.** Connect your first mailbox to get started."
             )
             if managed:
-                text += " Verwaltet über Umgebungsvariablen: " + html.escape(", ".join(managed))
+                text += " Managed through environment variables: " + html.escape(", ".join(managed))
             return (
                 text,
                 gr.update(choices=names, value=None),
@@ -254,11 +245,11 @@ def create_ui() -> gr.Blocks:  # noqa: C901
 
         def edit(name: str | None) -> tuple[Any, ...]:
             if not name:
-                return (None, "### Postfach hinzufügen", "", *DEFAULTS)
+                return (None, "### Add mailbox", "", *DEFAULTS)
             return (
                 name,
-                "### Postfach bearbeiten",
-                "Passwortfelder leer lassen, um gespeicherte Passwörter beizubehalten.",
+                "### Edit mailbox",
+                "Leave password fields blank to keep stored passwords.",
                 *load_form(name),
             )
 
@@ -269,7 +260,7 @@ def create_ui() -> gr.Blocks:  # noqa: C901
             try:
                 account = build_account(dict(zip(FIELDS, raw, strict=True)), original_name)
                 save_account(account, original_name)
-                return "✓ Postfach gespeichert.", account.account_name, "", "", ""
+                return "✓ Mailbox saved.", account.account_name, "", "", ""
             except Exception as error:
                 return _message(error), original_name, gr.skip(), gr.skip(), gr.skip()
 
@@ -288,12 +279,12 @@ def create_ui() -> gr.Blocks:  # noqa: C901
 
         def load_app(value: str) -> tuple[str, Any, Any, Any]:
             if value not in {"google", "microsoft"}:
-                return "Bitte zuerst Google oder Microsoft als Anbieter wählen.", gr.skip(), gr.skip(), gr.skip()
+                return "Select Google or Microsoft as the provider first.", gr.skip(), gr.skip(), gr.skip()
             client = load_clients()[value]
             if not client.get("client_id"):
-                return "Für diesen Anbieter sind noch keine App-Daten gespeichert.", "", "", "common"
+                return "No app credentials are stored for this provider yet.", "", "", "common"
             return (
-                "Gespeicherte App-Daten geladen. Das Client-Secret wird aus Sicherheitsgründen nicht angezeigt.",
+                "Stored app credentials loaded. The client secret is hidden for security.",
                 client["client_id"],
                 "",
                 client.get("tenant", "common"),
@@ -309,7 +300,7 @@ def create_ui() -> gr.Blocks:  # noqa: C901
         def save_app(value: str, identifier: str, secret: str, directory: str) -> str:
             try:
                 if value not in {"google", "microsoft"}:
-                    return "Bitte zuerst Google oder Microsoft als Anbieter wählen."
+                    return "Select Google or Microsoft as the provider first."
                 clients = load_clients()
                 google, microsoft = clients["google"], clients["microsoft"]
                 if value == "google":
@@ -317,14 +308,14 @@ def create_ui() -> gr.Blocks:  # noqa: C901
                 elif value == "microsoft":
                     microsoft = {"client_id": identifier, "tenant": directory}
                 if not identifier.strip():
-                    return "Bitte die Client-ID aus dem Anbieterportal eingeben."
+                    return "Enter the client ID from the provider portal."
                 save_clients(
                     google.get("client_id", ""),
                     google.get("client_secret", ""),
                     microsoft.get("client_id", ""),
                     microsoft.get("tenant", "common"),
                 )
-                return "✓ App-Daten gespeichert. Sie können sich jetzt beim Anbieter anmelden."
+                return "✓ App credentials saved. You can now sign in with the provider."
             except Exception as error:
                 return _message(error)
 
@@ -337,14 +328,14 @@ def create_ui() -> gr.Blocks:  # noqa: C901
             try:
                 values = dict(zip(FIELDS, raw, strict=True))
                 if not EMAIL_ADDRESS_REGEX.fullmatch(values["email_address"].strip()):
-                    yield "Bitte zuerst die E-Mail-Adresse eingeben.", gr.skip()
+                    yield "Enter the email address first.", gr.skip()
                     return
                 if session in pending_logins:
                     pending_logins[session].cancel()
                 pending = PendingLogin(values["provider"], values["email_address"].strip())
                 pending_logins[session] = pending
                 yield (
-                    f"[Anmeldung beim Anbieter öffnen]({pending.url})\n\nNach der Anmeldung wird das Postfach geprüft und gespeichert.",
+                    f"[Open provider sign-in]({pending.url})\n\nThe mailbox will be checked and saved after sign-in.",
                     gr.skip(),
                 )
                 while not pending.done.is_set():
@@ -355,13 +346,13 @@ def create_ui() -> gr.Blocks:  # noqa: C901
                 if not all(success for _, success, _ in results):
                     yield (
                         _connection_report(results)
-                        + "\n\nPostfach nicht gespeichert. Bitte Anbieter-Freigaben prüfen und erneut anmelden.",
+                        + "\n\nMailbox not saved. Check provider permissions and sign in again.",
                         gr.skip(),
                     )
                     return
                 save_account(account, original_name)
                 account_auth = None
-                yield "✓ Anmeldung und Verbindung erfolgreich. Postfach gespeichert.", account.account_name
+                yield "✓ Sign-in and connection succeeded. Mailbox saved.", account.account_name
             except Exception as error:
                 yield _message(error), gr.skip()
             finally:
@@ -381,23 +372,23 @@ def create_ui() -> gr.Blocks:  # noqa: C901
             pending = pending_logins.get(request.session_hash)
             if pending:
                 pending.cancel()
-            return "Anmeldung abgebrochen."
+            return "Sign-in cancelled."
 
         cancel_login.click(cancel, outputs=login_status, api_name=False, queue=False)
 
         def delete(name: str | None, confirmed: bool) -> tuple[str, bool]:
             if not name or not confirmed:
-                return "Bitte ein Postfach auswählen und das Entfernen bestätigen.", False
+                return "Select a mailbox and confirm removal.", False
             try:
                 if env_managed(name):
-                    return "Dieses Konto wird über Umgebungsvariablen verwaltet.", False
+                    return "This account is managed through environment variables.", False
                 settings = get_settings(reload=True)
                 account = settings.get_account(name)
                 if isinstance(account, EmailSettings) and account.oauth:
                     remove_tokens(account.oauth.credential_id)
                 settings.delete_email(name)
                 settings.store()
-                return "Postfach entfernt. E-Mails beim Anbieter bleiben erhalten.", False
+                return "Mailbox removed. Emails at the provider remain unchanged.", False
             except Exception as error:
                 return _message(error), False
 
@@ -409,16 +400,16 @@ def create_ui() -> gr.Blocks:  # noqa: C901
             try:
                 settings = get_settings(reload=True)
                 if name and not isinstance(settings.get_account(name), EmailSettings):
-                    return "Bitte ein vorhandenes Postfach auswählen."
+                    return "Select an existing mailbox."
                 allowed = _parse_allowed_recipients_input(addresses)
                 if allowed and not name:
-                    return "Bitte das Konto für die Empfängerfreigabe auswählen."
+                    return "Select an account for the recipient permission."
                 settings.ai_sends_email_tool = AiSendsEmailToolSettings(
                     allowed_account_name=name, allowed_recipients=allowed
                 )
                 settings.enable_attachment_download = allow_download
                 settings.store()
-                return "✓ Freigaben gespeichert."
+                return "✓ Permissions saved."
             except Exception as error:
                 return _message(error)
 

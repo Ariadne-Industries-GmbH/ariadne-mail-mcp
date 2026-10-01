@@ -18,11 +18,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
-            artifact: mcp-email-server-linux-x86_64
-            executable: dist/mcp-email-server
+            artifact: ariadne-mail-mcp-linux-x86_64
+            executable: dist/ariadne-mail-mcp
           - os: windows-2022
-            artifact: mcp-email-server-windows-x86_64
-            executable: dist/mcp-email-server.exe
+            artifact: ariadne-mail-mcp-windows-x86_64
+            executable: dist/ariadne-mail-mcp.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +48,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -57,8 +58,17 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          chmod +x artifacts/mcp-email-server-linux-x86_64/mcp-email-server
-          tar -czf mcp-email-server-linux-x86_64.tar.gz -C artifacts/mcp-email-server-linux-x86_64 mcp-email-server
-          zip -j mcp-email-server-windows-x86_64.zip artifacts/mcp-email-server-windows-x86_64/mcp-email-server.exe
-          sha256sum mcp-email-server-linux-x86_64.tar.gz mcp-email-server-windows-x86_64.zip > SHA256SUMS
-          gh release upload "$RELEASE_TAG" mcp-email-server-linux-x86_64.tar.gz mcp-email-server-windows-x86_64.zip SHA256SUMS
+          mkdir -p release-linux/docs/assets release-windows/docs/assets
+          cp artifacts/ariadne-mail-mcp-linux-x86_64/ariadne-mail-mcp release-linux/
+          cp artifacts/ariadne-mail-mcp-windows-x86_64/ariadne-mail-mcp.exe release-windows/
+          cp LICENSE NOTICE README.md release-linux/
+          cp LICENSE NOTICE README.md release-windows/
+          cp docs/user-setup.md docs/configuration.md docs/admin-security.md release-linux/docs/
+          cp docs/user-setup.md docs/configuration.md docs/admin-security.md release-windows/docs/
+          cp docs/assets/*.png release-linux/docs/assets/
+          cp docs/assets/*.png release-windows/docs/assets/
+          chmod +x release-linux/ariadne-mail-mcp
+          tar -czf ariadne-mail-mcp-linux-x86_64.tar.gz -C release-linux .
+          (cd release-windows && zip -r ../ariadne-mail-mcp-windows-x86_64.zip .)
+          sha256sum ariadne-mail-mcp-linux-x86_64.tar.gz ariadne-mail-mcp-windows-x86_64.zip > SHA256SUMS
+          gh release upload "$RELEASE_TAG" ariadne-mail-mcp-linux-x86_64.tar.gz ariadne-mail-mcp-windows-x86_64.zip SHA256SUMS

@@ -26,5 +26,5 @@ COPY . /app
 RUN uv sync --frozen
 
 # Run the server
-ENTRYPOINT ["tini", "--", "uv", "run", "mcp-email-server"]
+ENTRYPOINT ["tini", "--", "uv", "run", "ariadne-mail-mcp"]
 CMD ["stdio"]

@@ -91,12 +91,12 @@ def imap_decode(s: str) -> str:
         if c == "&":
             j = s.find("-", i)
             if j == -1:
-                # Ungültig -> rohes '&'
+                # Invalid sequence: keep the raw '&'.
                 out.append("&")
                 i += 1
                 continue
             if j == i + 1:
-                # "&-" steht für ein einzelnes '&'
+                # "&-" represents a single '&'.
                 out.append("&")
                 i = j + 1
                 continue
@@ -155,11 +155,11 @@ class EmailClient:
                 raise PermissionError("OAuth requires an encrypted IMAP connection.")
             response = await imap.xoauth2(server.user_name, await access_token(self.oauth))
             if not _is_ok(response):
-                raise PermissionError("IMAP-Anmeldung fehlgeschlagen. Konto und IMAP-Freigabe prüfen.")
+                raise PermissionError("IMAP sign-in failed. Check the account and IMAP access permission.")
         else:
             response = await imap.login(server.user_name, server.password)
             if not _is_ok(response):
-                raise PermissionError("IMAP-Anmeldung fehlgeschlagen. Zugangsdaten prüfen.")
+                raise PermissionError("IMAP sign-in failed. Check the credentials.")
 
     async def login_smtp(self, smtp: Any) -> None:
         if not self.oauth:
@@ -176,7 +176,7 @@ class EmailClient:
         if response.code == 334:
             await smtp.execute_command(b"")
         if response.code != 235:
-            raise PermissionError("SMTP-Anmeldung fehlgeschlagen. Konto und SMTP-AUTH-Freigabe prüfen.")
+            raise PermissionError("SMTP sign-in failed. Check the account and SMTP AUTH permission.")
 
     async def test_connection(self, protocol: str) -> None:
         """Authenticate only: do not send, mark, move, or fetch any messages."""
@@ -371,7 +371,7 @@ class EmailClient:
             # Login and select inbox
             await self.login_imap(imap)
             try:
-                await imap.id(name="mcp-email-server", version="1.0.0")
+                await imap.id(name="ariadne-mail-mcp", version="1.0.0")
             except Exception as e:
                 logger.warning(f"IMAP ID command failed: {e!s}")
             select_result = await imap.select(_quote_mailbox(mailbox))
@@ -552,7 +552,7 @@ class EmailClient:
             # Login and select inbox
             await self.login_imap(imap)
             try:
-                await imap.id(name="mcp-email-server", version="1.0.0")
+                await imap.id(name="ariadne-mail-mcp", version="1.0.0")
             except Exception as e:
                 logger.warning(f"IMAP ID command failed: {e!s}")
             select_result = await imap.select(_quote_mailbox(mailbox))
@@ -600,7 +600,7 @@ class EmailClient:
 
             await self.login_imap(imap)
             try:
-                await imap.id(name="mcp-email-server", version="1.0.0")
+                await imap.id(name="ariadne-mail-mcp", version="1.0.0")
             except Exception as e:
                 logger.warning(f"IMAP ID command failed: {e!s}")
             select_result = await imap.select(_quote_mailbox("INBOX"))
@@ -900,7 +900,7 @@ class EmailClient:
             await imap.wait_hello_from_server()
             await self.login_imap(imap)
 
-            # OPTIONAL: Spezialnutzung (RFC 6154) anfragen, Server-abhängig:
+            # Optional: request special-use flags (RFC 6154), depending on the server.
             # Manche Server verstehen: await imap.list("", "*", "RETURN", "(SPECIAL-USE)")
             # Sonst fallback:
             status, data = await imap.list('""', '"*"')
@@ -914,17 +914,17 @@ class EmailClient:
                 line = lines[i]
                 txt = line.decode("utf-8", "replace") if isinstance(line, (bytes, bytearray)) else str(line)
 
-                # Pragmatische Lösung: nimm einfach das letzte Feld (Mailbox-Name)
+                # Use the final field as the mailbox name.
                 # Format ist typischerweise: (<flags>) "<delim>" <name>
                 parts = txt.strip().split(" ", 2)
                 if len(parts) < 3:
-                    # Zusätzliche Statuszeilen überspringen
+                    # Skip additional status lines.
                     i += 1
                     continue
 
                 name_field = parts[2].strip()
 
-                # Literal? -> {N} und der eigentliche Name steht in der *nächsten* Zeile
+                # Literal {N}: the mailbox name is on the next line.
                 lit = re.fullmatch(r"\{(\d+)\}\r?$", name_field)
                 if lit:
                     n = int(lit.group(1))

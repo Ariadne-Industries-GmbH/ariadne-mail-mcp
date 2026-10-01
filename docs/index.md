@@ -1,8 +1,10 @@
-# mcp-email-server
+# Ariadne Mail MCP
 
-[![Release](https://img.shields.io/github/v/release/ai-zerolab/mcp-email-server)](https://img.shields.io/github/v/release/ai-zerolab/mcp-email-server)
-[![Build status](https://img.shields.io/github/actions/workflow/status/ai-zerolab/mcp-email-server/main.yml?branch=main)](https://github.com/ai-zerolab/mcp-email-server/actions/workflows/main.yml?query=branch%3Amain)
-[![Commit activity](https://img.shields.io/github/commit-activity/m/ai-zerolab/mcp-email-server)](https://img.shields.io/github/commit-activity/m/ai-zerolab/mcp-email-server)
-[![License](https://img.shields.io/github/license/ai-zerolab/mcp-email-server)](https://img.shields.io/github/license/ai-zerolab/mcp-email-server)
+A local IMAP/SMTP MCP server with a loopback setup UI, classic passwords, and customer-owned Google or Microsoft OAuth apps.
 
-IMAP and SMTP via MCP Server
+- [User setup](user-setup.md): install, connect mailboxes, configure Ariadne Engine, and troubleshoot.
+- [Configuration reference](configuration.md): `config.toml` example, fields, and environment variables.
+- [Administrator security overview](admin-security.md): trust boundary, credentials, permissions, OAuth grants, and dependency status.
+- [Python API](modules.md): internal modules for developers.
+
+The original project's copyright and BSD 3-Clause license are preserved in the repository's `LICENSE` and `NOTICE` files.

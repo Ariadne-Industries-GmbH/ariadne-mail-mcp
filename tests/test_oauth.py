@@ -72,7 +72,7 @@ def test_token_errors_do_not_expose_response(status, auth):
 
 def test_missing_keyring_has_actionable_message(auth, monkeypatch):
     monkeypatch.setattr("keyring.get_password", MagicMock(side_effect=RuntimeError("secret")))
-    with pytest.raises(LoginError, match="Schlüsselbund") as error:
+    with pytest.raises(LoginError, match="keyring") as error:
         _access_token(auth)
     assert "secret" not in str(error.value)
 
@@ -118,12 +118,12 @@ def test_login_pkce_state_callback_and_one_use(provider, vault):
             assert post.call_args.kwargs["data"]["code_verifier"] == login.verifier
             assert account.provider == provider
             assert account.credential_id in vault
-            with pytest.raises(LoginError, match="verwendet"):
+            with pytest.raises(LoginError, match="already been used"):
                 login.finish()
 
 
 def test_oauth_requires_registration_before_opening_listener():
-    with patch("mcp_email_server.oauth.HTTPServer") as server, pytest.raises(LoginError, match="eingerichtet"):
+    with patch("mcp_email_server.oauth.HTTPServer") as server, pytest.raises(LoginError, match="not configured"):
         PendingLogin("google", "test@example.com")
     server.assert_not_called()
 

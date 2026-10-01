@@ -12,7 +12,7 @@ from mcp_email_server.oauth import HOSTS, LoginError, remove_tokens
 PROVIDERS = [("IMAP / SMTP", "manual"), ("Google / Gmail", "google"), ("Microsoft 365 / Outlook", "microsoft")]
 TLS = "SSL/TLS"
 STARTTLS = "STARTTLS"
-PLAIN = "Unverschlüsselt"
+PLAIN = "Unencrypted"
 FIELDS = [
     "account_name",
     "full_name",
@@ -80,7 +80,7 @@ def _port(raw: Any, label: str) -> int:
             raise ValueError  # noqa: TRY301 - handled here as a field-specific validation error
         return port
     except (TypeError, ValueError, OverflowError):
-        raise SetupError(f"{label}: Bitte einen Port zwischen 1 und 65535 eingeben.") from None
+        raise SetupError(f"{label}: Enter a port between 1 and 65535.") from None
 
 
 def build_account(  # noqa: C901
@@ -94,29 +94,29 @@ def build_account(  # noqa: C901
     if not name:
         name = address
     if not EMAIL_ADDRESS_REGEX.fullmatch(address):
-        raise SetupError("Bitte eine gültige E-Mail-Adresse eingeben.")
+        raise SetupError("Enter a valid email address.")
     settings = get_settings(reload=True)
     existing = settings.get_account(original or "")
     if original and not isinstance(existing, EmailSettings):
-        raise SetupError("Dieses Konto existiert nicht mehr. Bitte die Kontenliste aktualisieren.")
+        raise SetupError("This account no longer exists. Refresh the account list.")
     if (original and env_managed(original)) or env_managed(name):
-        raise SetupError("Dieses Konto wird über Umgebungsvariablen verwaltet. Änderungen dort vornehmen.")
+        raise SetupError("This account is managed through environment variables. Change it there.")
     if original and name != original:
-        raise SetupError("Der interne Kontoname bleibt beim Bearbeiten unverändert.")
+        raise SetupError("The internal account name cannot be changed while editing.")
     if not original and settings.get_account(name):
-        raise SetupError("Dieser Kontoname ist bereits vergeben. Bitte einen anderen Namen wählen.")
+        raise SetupError("This account name is already in use. Choose another name.")
     provider = values["provider"]
     if provider not in {"manual", "google", "microsoft"}:
-        raise SetupError("Bitte einen gültigen Anbieter auswählen.")
+        raise SetupError("Select a valid provider.")
     if provider != "manual":
         if oauth is None and isinstance(existing, EmailSettings) and existing.oauth:
             if existing.email_address != address or existing.oauth.provider != provider:
-                raise SetupError("Bei einem Wechsel von Adresse oder Anbieter bitte erneut anmelden.")
+                raise SetupError("Sign in again after changing the address or provider.")
             oauth = existing.oauth
         if oauth is None:
-            raise SetupError("Bitte zuerst beim Anbieter anmelden.")
+            raise SetupError("Sign in with the provider first.")
         if oauth.provider != provider:
-            raise SetupError("Die Anmeldung gehört zu einem anderen Anbieter.")
+            raise SetupError("This sign-in belongs to another provider.")
         imap_host, smtp_host = HOSTS[provider]
         account = EmailSettings.init(
             account_name=name,
@@ -138,11 +138,11 @@ def build_account(  # noqa: C901
         incoming_password = values["imap_password"] or values["password"] or (old_i.password if old_i else "")
         outgoing_password = values["smtp_password"] or values["password"] or (old_o.password if old_o else "")
         if not incoming_password or not outgoing_password:
-            raise SetupError("Bitte das Passwort beziehungsweise App-Passwort eingeben.")
+            raise SetupError("Enter the password or app password.")
         for field in ("imap_host", "smtp_host"):
             host = values[field]
             if not host or any(c.isspace() for c in host) or "://" in host or "/" in host:
-                raise SetupError("Bitte die Servernamen ohne https:// oder Pfad eingeben.")
+                raise SetupError("Enter server names without https:// or a path.")
         account = EmailSettings.init(
             account_name=name,
             full_name=values["full_name"] or address,
@@ -173,14 +173,14 @@ def save_account(account: EmailSettings, original: str | None = None) -> None:
     settings = get_settings(reload=True)
     old = settings.get_account(original or "")
     if env_managed(account.account_name):
-        raise SetupError("Das Konto wird über Umgebungsvariablen verwaltet.")
+        raise SetupError("This account is managed through environment variables.")
     if original:
         if not isinstance(old, EmailSettings):
-            raise SetupError("Das Konto wurde zwischenzeitlich entfernt. Bitte neu laden.")
+            raise SetupError("The account was removed. Refresh and try again.")
         settings.emails = [account if e.account_name == original else e for e in settings.emails]
     else:
         if settings.get_account(account.account_name):
-            raise SetupError("Dieser Kontoname ist inzwischen vergeben. Bitte neu laden.")
+            raise SetupError("This account name is now in use. Refresh and try again.")
         settings.add_email(account)
     settings.store()
     if isinstance(old, EmailSettings) and old.oauth and old.oauth != account.oauth:
@@ -195,10 +195,10 @@ async def check_account(account: EmailSettings) -> list[tuple[str, bool, str]]:
         client = handler.incoming_client if protocol == "IMAP" else handler.outgoing_client
         try:
             await asyncio.wait_for(client.test_connection(protocol), timeout=25)
-            return protocol, True, "Verbindung und Anmeldung erfolgreich."
+            return protocol, True, "Connection and sign-in succeeded."
         except LoginError as error:
             return protocol, False, str(error)
         except Exception:
-            return protocol, False, "Anmeldung nicht möglich. Server, Zugangsdaten, TLS und Anbieter-Freigabe prüfen."
+            return protocol, False, "Sign-in failed. Check the server, credentials, TLS, and provider permissions."
 
     return list(await asyncio.gather(check("IMAP"), check("SMTP")))

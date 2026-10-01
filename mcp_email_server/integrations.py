@@ -19,7 +19,7 @@ def client_config(command: str) -> str:
     return json.dumps(
         {
             "mcpServers": {
-                "email": {
+                "ariadne-mail-mcp": {
                     "command": command.strip() or command_path(),
                     "args": ["stdio"],
                     "env": {"MCP_EMAIL_SERVER_CONFIG_PATH": str(get_config_path())},
@@ -38,9 +38,9 @@ def register_ariadne(api_key: str, endpoint: str, name: str, command: str, tags:
         parsed.scheme != "https"
         and not (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"})
     ):
-        return "Bitte eine HTTPS-Adresse der Ariadne Engine eingeben (HTTP nur lokal)."
+        return "Enter an HTTPS Ariadne Engine URL (HTTP is allowed only on localhost)."
     if not api_key.strip() or not name or not command:
-        return "API-Schlüssel, Name und Programmpfad sind erforderlich."
+        return "API key, name, and program path are required."
     dto = {
         "key": "",
         "name": name,
@@ -74,10 +74,10 @@ def register_ariadne(api_key: str, endpoint: str, name: str, command: str, tags:
                 if isinstance(existing, dict) and "data" in existing:
                     existing = existing["data"]
             else:
-                return f"Engine-Abfrage fehlgeschlagen (HTTP {response.status_code}). URL und Berechtigung prüfen."
+                return f"Engine lookup failed (HTTP {response.status_code}). Check the URL and permissions."
             key = existing.get("key") if isinstance(existing, dict) else None
             if existing is not None and not key:
-                return "Die Engine hat keinen gültigen Schlüssel für den bestehenden Eintrag geliefert."
+                return "The Engine did not return a valid key for the existing entry."
             dto["key"] = key or ""
             response = client.post(
                 endpoint,
@@ -91,7 +91,7 @@ def register_ariadne(api_key: str, endpoint: str, name: str, command: str, tags:
                 },
             )
             if not response.is_success:
-                return f"Registrierung fehlgeschlagen (HTTP {response.status_code}). Berechtigungen prüfen."
-            return "MCP-Eintrag in Ariadne aktualisiert." if key else "MCP-Eintrag in Ariadne angelegt."
+                return f"Registration failed (HTTP {response.status_code}). Check permissions."
+            return "MCP entry updated in Ariadne." if key else "MCP entry created in Ariadne."
     except (httpx.HTTPError, ValueError):
-        return "Die Engine ist nicht erreichbar oder liefert eine ungültige Antwort."
+        return "The Engine is unavailable or returned an invalid response."

@@ -1,9 +1,11 @@
 [project]
-name = "mcp-email-server"
+name = "ariadne-mail-mcp"
 version = "0.0.1"
-description = "IMAP and SMTP via MCP Server"
-authors = [{ name = "ai-zerolab", email = "jizhongsheng957@gmail.com" }]
+description = "Local IMAP and SMTP MCP server"
+maintainers = [{ name = "Ariadne Industries GmbH" }]
 readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE", "NOTICE"]
 keywords = ["MCP", "IMAP", "SMTP", "email"]
 requires-python = ">=3.10,<4.0"
 classifiers = [
@@ -33,12 +35,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mcp-email-server = "mcp_email_server.cli:main"
-
-[project.urls]
-Homepage = "https://ai-zerolab.github.io/mcp-email-server/"
-Repository = "https://github.com/ai-zerolab/mcp-email-server"
-Documentation = "https://ai-zerolab.github.io/mcp-email-server/"
+ariadne-mail-mcp = "mcp_email_server.cli:main"
 
 [dependency-groups]
 dev = [
@@ -60,8 +57,8 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.setuptools]
-py-modules = ["mcp_email_server"]
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_email_server"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

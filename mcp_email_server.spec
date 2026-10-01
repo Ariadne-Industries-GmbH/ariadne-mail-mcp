@@ -25,7 +25,7 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(
-    pyz, a.scripts, a.binaries, a.datas, [], name='mcp-email-server',
+    pyz, a.scripts, a.binaries, a.datas, [], name='ariadne-mail-mcp',
     debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
     runtime_tmpdir=None, console=True, disable_windowed_traceback=False,
     argv_emulation=False, target_arch=None, codesign_identity=None, entitlements_file=None,
