@@ -75,7 +75,7 @@ For direct edits, see the [complete `config.toml` example and field reference](c
 
 `ariadne-mail-mcp reset` removes the active local config and OAuth app data, recognized legacy profile and current working-directory copies, any recorded migration source, and the OAuth tokens referenced by those files. It prints the config locations from which files were removed. If keyring access fails, reset stops without deleting config files. A small marker without secrets remains to prevent automatic re-import on the next start.
 
-If a migration predates source tracking or its record is missing, a source in a *different* former working directory cannot be discovered automatically. Check that directory and backups separately. With `MCP_EMAIL_SERVER_CONFIG_PATH` set, reset affects only the explicit config location. Remove client registrations, environment secrets, and provider consent separately when decommissioning.
+If a migration predates source tracking or its record is missing, a source in a _different_ former working directory cannot be discovered automatically. Check that directory and backups separately. With `MCP_EMAIL_SERVER_CONFIG_PATH` set, reset affects only the explicit config location. Remove client registrations, environment secrets, and provider consent separately when decommissioning.
 
 ## Troubleshooting
 
