@@ -1,12 +1,11 @@
 name: Windows and Linux binaries
 
 on:
+  workflow_call:
   workflow_dispatch:
   pull_request:
   push:
     branches: [main]
-  release:
-    types: [published]
 
 permissions:
   contents: read
@@ -40,35 +39,3 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.executable }}
           if-no-files-found: error
-
-  attach-release:
-    if: github.event_name == 'release'
-    needs: build
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - name: Archive native binaries and upload checksums
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          mkdir -p release-linux/docs/assets release-windows/docs/assets
-          cp artifacts/ariadne-mail-mcp-linux-x86_64/ariadne-mail-mcp release-linux/
-          cp artifacts/ariadne-mail-mcp-windows-x86_64/ariadne-mail-mcp.exe release-windows/
-          cp LICENSE NOTICE README.md release-linux/
-          cp LICENSE NOTICE README.md release-windows/
-          cp docs/user-setup.md docs/configuration.md docs/admin-security.md release-linux/docs/
-          cp docs/user-setup.md docs/configuration.md docs/admin-security.md release-windows/docs/
-          cp docs/assets/*.png release-linux/docs/assets/
-          cp docs/assets/*.png release-windows/docs/assets/
-          chmod +x release-linux/ariadne-mail-mcp
-          tar -czf ariadne-mail-mcp-linux-x86_64.tar.gz -C release-linux .
-          (cd release-windows && zip -r ../ariadne-mail-mcp-windows-x86_64.zip .)
-          sha256sum ariadne-mail-mcp-linux-x86_64.tar.gz ariadne-mail-mcp-windows-x86_64.zip > SHA256SUMS
-          gh release upload "$RELEASE_TAG" ariadne-mail-mcp-linux-x86_64.tar.gz ariadne-mail-mcp-windows-x86_64.zip SHA256SUMS
