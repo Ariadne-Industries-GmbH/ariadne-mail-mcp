@@ -1,6 +1,6 @@
 {
     "mcpServers": {
-        "zerolib-email": {
+        "ariadne-mail-mcp": {
             "command": "{{ ENTRYPOINT }}",
             "args": ["stdio"]
         }

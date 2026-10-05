@@ -9,8 +9,7 @@ to allow for testing, debugging, and productive use of email functionality.
 import asyncio
 import json
 import sys
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime
 
 from mcp_email_server.config import EmailServer, EmailSettings
 from mcp_email_server.emails.classic import ClassicEmailHandler
@@ -20,16 +19,16 @@ async def list_emails(
     client: ClassicEmailHandler,
     page: int = 1,
     page_size: int = 10,
-    before: Optional[datetime] = None,
-    since: Optional[datetime] = None,
-    subject: Optional[str] = None,
-    from_address: Optional[str] = None,
-    to_address: Optional[str] = None,
+    before: datetime | None = None,
+    since: datetime | None = None,
+    subject: str | None = None,
+    from_address: str | None = None,
+    to_address: str | None = None,
     order: str = "desc",
 ) -> None:
     """List emails with metadata."""
     print(f"\nListing emails (page {page}, {page_size} per page)...")
-    
+
     response = await client.get_emails_metadata(
         page=page,
         page_size=page_size,
@@ -42,10 +41,10 @@ async def list_emails(
     )
     emails = response.emails
     total = response.total
-    
+
     print(f"\nFound {len(emails)} emails (total: {total})")
     print("-" * 80)
-    
+
     for i, email in enumerate(emails, start=1):
         print(f"\nEmail {i} of {len(emails)}:")
         print(f"  ID: {email.email_id}")
@@ -59,9 +58,9 @@ async def list_emails(
 async def get_email_body(client: ClassicEmailHandler, email_id: str) -> None:
     """Get the full body of a specific email."""
     print(f"\nFetching email body for ID: {email_id}...")
-    
+
     response = await client.get_emails_content([email_id])
-    
+
     if response.emails:
         email = response.emails[0]
         print(f"\nSubject: {email.subject}")
@@ -72,7 +71,7 @@ async def get_email_body(client: ClassicEmailHandler, email_id: str) -> None:
         print("-" * 80)
         print(email.body)
         print("-" * 80)
-        
+
         if email.attachments:
             print(f"\nAttachments: {', '.join(email.attachments)}")
     else:
@@ -84,20 +83,20 @@ async def send_email(
     recipients: list[str],
     subject: str,
     body: str,
-    cc: Optional[list[str]] = None,
-    bcc: Optional[list[str]] = None,
+    cc: list[str] | None = None,
+    bcc: list[str] | None = None,
     html: bool = False,
 ) -> None:
     """Send an email."""
     print(f"\nSending email to: {', '.join(recipients)}")
     print(f"Subject: {subject}")
     print(f"Body length: {len(body)} characters")
-    
+
     if cc:
         print(f"CC: {', '.join(cc)}")
     if bcc:
         print(f"BCC: {len(bcc)} recipients (hidden)")
-    
+
     try:
         await client.send_email(recipients, subject, body, cc, bcc, html)
         print("\nEmail sent successfully!")
@@ -109,16 +108,13 @@ async def send_email(
 async def list_folders(client: ClassicEmailHandler, include_noselect: bool = True) -> None:
     """List all folders in the mail account."""
     print(f"\nListing folders (include_noselect={include_noselect})...")
-    
+
     folders = await client.list_folders(include_noselect)
-    
+
     print(f"\nFound {len(folders)} folders:")
     print("-" * 80)
     for folder in folders:
         print(f"  {folder}")
-
-
-
 
 
 async def move_email(
@@ -129,7 +125,7 @@ async def move_email(
 ) -> None:
     """Move an email from one folder to another."""
     print(f"\nMoving email {email_id} from {source_folder} to {destination_folder}...")
-    
+
     success, new_uid, error = await client.move_email(email_id, source_folder, destination_folder)
 
     if success:
@@ -145,9 +141,9 @@ async def move_email(
 async def delete_email(client: ClassicEmailHandler, email_id: str, folder: str = "INBOX") -> None:
     """Delete an email."""
     print(f"\nDeleting email {email_id} from {folder}...")
-    
-    deleted_ids, failed_ids = await client.delete_emails([email_id], folder)
-    
+
+    deleted_ids, _failed_ids = await client.delete_emails([email_id], folder)
+
     if deleted_ids:
         print("Email deleted successfully!")
     else:
@@ -163,9 +159,9 @@ async def mark_email(
 ) -> None:
     """Mark an email with a flag."""
     print(f"\nMarking email {email_id} as {mark} in {folder}...")
-    
+
     success = await client.mark_email(email_id, folder, mark)
-    
+
     if success:
         print(f"Email marked as {mark} successfully!")
     else:
@@ -175,46 +171,46 @@ async def mark_email(
 
 async def export_emails(
     client: ClassicEmailHandler,
-    output: Optional[str] = None,
+    output: str | None = None,
     page_size: int = 100,
     max_pages: int = 10,
 ) -> None:
     """Export emails to a JSON file."""
     print(f"\nExporting emails to {output}...")
-    
+
     all_emails = []
-    
+
     for page in range(1, max_pages + 1):
         print(f"  Processing page {page}...")
-        
+
         response = await client.get_emails_metadata(page=page, page_size=page_size)
         emails = response.emails
-        
+
         if not emails:
             print(f"  No more emails found after page {page}")
             break
-        
+
         all_emails.extend(emails)
-        
+
         if len(emails) < page_size:
-            print(f"  Reached end of emails")
+            print("  Reached end of emails")
             break
-    
+
     print(f"\nExported {len(all_emails)} emails")
-    
+
     # Convert EmailMetadata objects to dicts for JSON serialization
     email_dicts = [email.model_dump() for email in all_emails]
-    
+
     with open(output, "w", encoding="utf-8") as f:
         json.dump(email_dicts, f, indent=2, default=str)
-    
+
     print(f"\nExported to {output}")
 
 
 async def main():
     """Main CLI entry point."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(
         description="Email Client CLI Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -236,9 +232,9 @@ Examples:
   email-cli export --output emails.json
         """,
     )
-    
+
     subparsers = parser.add_subparsers(dest="command", required=True)
-    
+
     # List command
     list_parser = subparsers.add_parser("list", help="List emails")
     list_parser.add_argument("--page", type=int, default=1, help="Page number")
@@ -250,12 +246,12 @@ Examples:
     list_parser.add_argument("--to-address", type=str, dest="to_address", help="Filter by recipient")
     list_parser.add_argument("--order", type=str, default="desc", help="Order: asc or desc")
     list_parser.set_defaults(func=list_emails)
-    
+
     # Get body command
     get_body_parser = subparsers.add_parser("get-body", help="Get email body")
     get_body_parser.add_argument("email_id", help="Email ID/UID")
     get_body_parser.set_defaults(func=get_email_body)
-    
+
     # Send command
     send_parser = subparsers.add_parser("send", help="Send an email")
     send_parser.add_argument("--to", required=True, nargs="+", help="Recipient email(s)")
@@ -265,7 +261,7 @@ Examples:
     send_parser.add_argument("--bcc", nargs="*", help="BCC recipients")
     send_parser.add_argument("--html", action="store_true", help="Send as HTML")
     send_parser.set_defaults(func=send_email)
-    
+
     # List folders command
     folders_parser = subparsers.add_parser("list-folders", help="List folders")
     folders_parser.add_argument(
@@ -275,7 +271,6 @@ Examples:
         help="Exclude folders marked as NOSELECT",
     )
     folders_parser.set_defaults(func=list_folders)
-    
 
     # Move command
     move_parser = subparsers.add_parser("move", help="Move email")
@@ -283,13 +278,13 @@ Examples:
     move_parser.add_argument("--source-folder", required=True, help="Source folder")
     move_parser.add_argument("--destination-folder", required=True, help="Destination folder")
     move_parser.set_defaults(func=move_email)
-    
+
     # Delete command
     delete_parser = subparsers.add_parser("delete", help="Delete email")
     delete_parser.add_argument("email_id", help="Email ID/UID")
     delete_parser.add_argument("--folder", default="INBOX", help="Folder containing email")
     delete_parser.set_defaults(func=delete_email)
-    
+
     # Mark command
     mark_parser = subparsers.add_parser("mark", help="Mark email")
     mark_parser.add_argument("email_id", help="Email ID/UID")
@@ -301,33 +296,33 @@ Examples:
         help="Mark type",
     )
     mark_parser.set_defaults(func=mark_email)
-    
+
     # Export command
     export_parser = subparsers.add_parser("export", help="Export emails to JSON")
     export_parser.add_argument("output", help="Output file path")
     export_parser.add_argument("--page-size", type=int, default=100, help="Emails per page")
     export_parser.add_argument("--max-pages", type=int, default=10, help="Maximum pages to export")
     export_parser.set_defaults(func=export_emails)
-    
+
     args = parser.parse_args()
-    
+
     # Parse date arguments
     if hasattr(args, "before") and args.before:
         args.before = datetime.strptime(args.before, "%Y-%m-%d")
     if hasattr(args, "since") and args.since:
         args.since = datetime.strptime(args.since, "%Y-%m-%d")
-    
+
     # Create email client
     from mcp_email_server.config import get_settings
-    
+
     config = get_settings()
-    
+
     # Check if we have any email accounts configured
     if not config.emails:
         print("Error: No email accounts configured. Please configure your email settings.")
         print("You can set environment variables or create a config file.")
         sys.exit(1)
-    
+
     # Use incoming server for most operations
     email_server = EmailServer(
         host=config.emails[0].incoming.host,
@@ -337,7 +332,7 @@ Examples:
         use_ssl=config.emails[0].incoming.use_ssl,
         start_ssl=config.emails[0].incoming.start_ssl,
     )
-    
+
     # Use outgoing server for sending
     outgoing_server = EmailServer(
         host=config.emails[0].outgoing.host,
@@ -347,7 +342,7 @@ Examples:
         use_ssl=config.emails[0].outgoing.use_ssl,
         start_ssl=config.emails[0].outgoing.start_ssl,
     )
-    
+
     email_settings = EmailSettings(
         account_name=config.emails[0].account_name,
         email_address=config.emails[0].email_address,
@@ -357,12 +352,12 @@ Examples:
         save_to_sent=config.emails[0].save_to_sent,
         sent_folder_name=config.emails[0].sent_folder_name,
     )
-    
+
     client = ClassicEmailHandler(email_settings)
-    
+
     # Call the appropriate function
     # Filter out 'command' and 'func' from args as they're not needed by the functions
-    filtered_args = {k: v for k, v in vars(args).items() if k not in ('command', 'func')}
+    filtered_args = {k: v for k, v in vars(args).items() if k not in ("command", "func")}
     await args.func(client, **filtered_args)
 
 
@@ -375,5 +370,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nError: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

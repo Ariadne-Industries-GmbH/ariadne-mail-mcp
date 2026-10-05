@@ -1,56 +1,57 @@
-import os
 import sys
 
 import typer
 
 from mcp_email_server.app import mcp
 from mcp_email_server.config import delete_settings
+from mcp_email_server.oauth import LoginError
+from mcp_email_server.paths import get_config_path, migrate_legacy_config
 
 app = typer.Typer()
 
 
 @app.command()
 def stdio():
+    migrate_legacy_config()
     mcp.run(transport="stdio")
 
 
 @app.command()
-def sse(
-    host: str = "localhost",
-    port: int = 9557,
-):
-    mcp.settings.host = host
-    mcp.settings.port = port
-    mcp.run(transport="sse")
-
-
-@app.command()
-def streamable_http(
-    host: str = os.environ.get("MCP_HOST", "localhost"),
-    port: int = os.environ.get("MCP_PORT", 9557),
-):
-    mcp.settings.host = host
-    mcp.settings.port = port
-    mcp.run(transport="streamable-http")
-
-
-@app.command()
-def ui():
+def ui(port: int | None = None, open_browser: bool = True):
     from mcp_email_server.ui import main as ui_main
 
-    ui_main()
+    ui_main(port=port, open_browser=open_browser)
+
+
+@app.command("config-path")
+def config_path():
+    """Print the configuration location without exposing credentials."""
+    typer.echo(str(get_config_path()))
 
 
 @app.command()
-def reset():
-    delete_settings()
-    typer.echo("✅ Config reset")
+def reset(yes: bool = typer.Option(False, "--yes", help="Skip confirmation.")):
+    if not yes:
+        typer.confirm(
+            "Remove local account settings, OAuth app data, stored tokens, and known legacy copies?", abort=True
+        )
+    try:
+        removed = delete_settings()
+    except (LoginError, OSError, ValueError) as error:
+        typer.echo(f"Reset failed: {error}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo("Local account settings and stored OAuth credentials removed.")
+    if removed:
+        typer.echo("Removed files from these config locations:")
+        for path in removed:
+            typer.echo(f"- {path}")
 
 
 def main():
-    # Wenn NUR das Script ausgeführt wird (ohne weitere Argumente)
+    # Open the setup UI when the script is launched without arguments.
     if len(sys.argv) == 1:
         from mcp_email_server.ui import main as ui_main
+
         ui_main()
     else:
         app()

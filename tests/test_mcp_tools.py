@@ -358,13 +358,14 @@ class TestMcpTools:
 
     @pytest.mark.asyncio
     async def test_send_email(self):
-        """Test send_email MCP tool."""
+        """The internal unrestricted sender requires its separate environment gate."""
         # Mock the dispatch_handler function
         mock_handler = AsyncMock()
 
-        # Enable email sending for the test
-        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler), \
-             patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}):
+        with (
+            patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler),
+            patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}),
+        ):
             # Call the function
             result = await send_email(
                 account_name="test_account",
@@ -390,6 +391,21 @@ class TestMcpTools:
                 None,
                 None,
             )
+
+    @pytest.mark.asyncio
+    async def test_internal_send_email_is_disabled_by_default(self):
+        with patch("mcp_email_server.app.dispatch_handler") as dispatch, pytest.raises(PermissionError):
+            await send_email(account_name="work", recipients=["recipient@example.com"], subject="Hello", body="Test")
+        dispatch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_internal_sending_flag_does_not_publish_unrestricted_tool(self):
+        from mcp_email_server.app import mcp
+
+        with patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}):
+            names = {tool.name for tool in await mcp.list_tools()}
+        assert "send_email_to_allowed_recipients" in names
+        assert "send_email" not in names
 
     @pytest.mark.asyncio
     async def test_get_allowed_recipients_empty(self):
@@ -763,12 +779,14 @@ class TestMcpTools:
 
     @pytest.mark.asyncio
     async def test_send_email_with_reply_headers(self):
-        """Test send_email MCP tool with reply headers."""
+        """Test the internal sender with reply headers."""
         mock_handler = AsyncMock()
         mock_handler.send_email = AsyncMock()
 
-        with patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler), \
-             patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}):
+        with (
+            patch("mcp_email_server.app.dispatch_handler", return_value=mock_handler),
+            patch.dict("os.environ", {"MCP_EMAIL_SERVER_ENABLE_SENDING": "1"}),
+        ):
             result = await send_email(
                 account_name="test",
                 recipients=["recipient@example.com"],

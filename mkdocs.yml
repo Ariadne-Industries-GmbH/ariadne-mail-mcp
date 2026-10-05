@@ -1,14 +1,13 @@
-site_name: mcp-email-server
-repo_url: https://github.com/ai-zerolab/mcp-email-server
-site_url: https://ai-zerolab.github.io/mcp-email-server
-site_description: IMAP and SMTP via MCP Server
-site_author: ai-zerolab
-edit_uri: edit/main/docs/
-repo_name: ai-zerolab/mcp-email-server
-copyright: Maintained by <a href="https://ai-zerolab.com">ai-zerolab</a>.
+site_name: Ariadne Mail MCP
+site_description: Local IMAP and SMTP via MCP
+site_author: Ariadne Industries GmbH
+copyright: Copyright (c) 2026 Ariadne Industries GmbH. Original BSD 3-Clause notices are in LICENSE and NOTICE.
 
 nav:
   - Home: index.md
+  - User setup: user-setup.md
+  - Configuration reference: configuration.md
+  - Administrator security: admin-security.md
   - Modules: modules.md
 plugins:
   - search
@@ -35,15 +34,6 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
-  icon:
-    repo: fontawesome/brands/github
-
-extra:
-  social:
-    - icon: fontawesome/brands/github
-      link: https://github.com/ai-zerolab/mcp-email-server
-    - icon: fontawesome/brands/python
-      link: https://pypi.org/project/mcp-email-server
 
 markdown_extensions:
   - toc:

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mcp_email_server.config import EmailServer, EmailSettings, ProviderSettings, delete_settings
+from mcp_email_server.config import EmailServer, EmailSettings, ProviderSettings
 
 _HERE = Path(__file__).resolve().parent
 
@@ -18,7 +18,15 @@ os.environ["MCP_EMAIL_SERVER_LOG_LEVEL"] = "DEBUG"
 
 @pytest.fixture(autouse=True)
 def patch_env(monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory):
-    delete_settings()
+    # Every test is isolated; never delete the developer's real configuration.
+    from mcp_email_server import config
+
+    for name in list(os.environ):
+        if name.startswith("MCP_EMAIL_SERVER_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("MCP_EMAIL_SERVER_CONFIG_PATH", str(tmp_path / "config.toml"))
+    monkeypatch.setattr(config, "_settings", None)
+    monkeypatch.setattr(config, "_settings_signature", None)
     yield
 
 
@@ -75,7 +83,7 @@ def mock_imap():
     mock_imap._client_task = asyncio.Future()
     mock_imap._client_task.set_result(None)
     mock_imap.wait_hello_from_server = AsyncMock()
-    mock_imap.login = AsyncMock()
+    mock_imap.login = AsyncMock(return_value=("OK", []))
     mock_imap.select = AsyncMock()
     mock_imap.search = AsyncMock(return_value=(None, [b"1 2 3"]))
     mock_imap.fetch = AsyncMock(return_value=(None, [b"HEADER", bytearray(b"EMAIL CONTENT")]))

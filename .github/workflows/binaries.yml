@@ -1,0 +1,41 @@
+name: Windows and Linux binaries
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            artifact: ariadne-mail-mcp-linux-x86_64
+            executable: dist/ariadne-mail-mcp
+          - os: windows-2022
+            artifact: ariadne-mail-mcp-windows-x86_64
+            executable: dist/ariadne-mail-mcp.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run pytest -q
+      - run: uv run pyinstaller --noconfirm --clean mcp_email_server.spec
+      - name: Test binary MCP protocol and setup UI
+        run: uv run python dev/smoke_binary.py ${{ matrix.executable }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.executable }}
+          if-no-files-found: error

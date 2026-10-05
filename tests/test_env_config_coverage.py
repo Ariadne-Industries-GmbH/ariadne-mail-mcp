@@ -289,10 +289,10 @@ use_ssl = true
     monkeypatch.setenv("MCP_EMAIL_SERVER_SMTP_HOST", "smtp.env.com")
 
     settings = Settings()
-    # Note: Our implementation replaces all TOML with env, so we only get 1 account
-    assert len(settings.emails) == 1
-    assert settings.emails[0].account_name == "third"
-    assert settings.emails[0].email_address == "env@example.com"
+    # Only the named account is overridden; unrelated TOML accounts are retained.
+    assert len(settings.emails) == 3
+    assert settings.emails[2].account_name == "third"
+    assert settings.emails[2].email_address == "env@example.com"
 
 
 def test_email_settings_masked(monkeypatch):
