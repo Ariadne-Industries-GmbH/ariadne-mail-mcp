@@ -6,7 +6,7 @@ Download the Windows or Linux x86-64 release archive, extract it, and keep the f
 
 The Linux binary targets glibc 2.35 or newer (for example, Ubuntu 22.04). OAuth also requires the operating system's keyring. Windows uses its credential store; Linux needs a user D-Bus session and an unlocked Secret Service keyring.
 
-If port 8765 is in use, run `ariadne-mail-mcp ui --port 8766`. Use `ariadne-mail-mcp ui --no-open-browser` to avoid opening a browser automatically. The UI binds only to `127.0.0.1`; it has no separate login. Use it only in a trusted local user session.
+The default start tries ports 8765 through 8774 in order and opens the chosen address in the browser. To choose one fixed port, run `ariadne-mail-mcp ui --port 8766`. Use `--no-open-browser` to open the shown address manually. Gradio can show a port error when its server fails to start for another reason; if several ports fail, the error alone does not prove that a process occupies them. The UI binds only to `127.0.0.1`; it has no separate login. Use it only in a trusted local user session.
 
 ## Connect a mailbox
 
@@ -15,6 +15,8 @@ In **Mailboxes**, select a sign-in method:
 - **IMAP / SMTP:** Enter the address, password or app password, and both server names. Advanced settings include separate login names, ports, encryption, and the sent folder.
 - **Google / Gmail:** Follow the on-screen guide to create your own Google desktop OAuth app, grant the required mail scope, and sign in.
 - **Microsoft 365 / Outlook:** Follow the on-screen guide to create your own Entra desktop app with delegated IMAP and SMTP permissions. Your administrator may need to approve these permissions or enable mailbox access.
+
+An **app password** is a separate password generated in your mail provider's account settings for apps that sign in through IMAP/SMTP. If your provider requires one, enter it in the **Password / app password** field instead of your normal account password. It is neither an OAuth client secret nor an Ariadne Mail MCP password. Availability depends on the provider and organization policy.
 
 Each user or organization creates its own provider app. This program has no shared publisher app. Provider consent happens in your browser, and user OAuth tokens are stored in the system keyring. Sign-in expires after three minutes and can be retried or cancelled.
 

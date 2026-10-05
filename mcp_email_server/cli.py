@@ -17,7 +17,7 @@ def stdio():
 
 
 @app.command()
-def ui(port: int = 8765, open_browser: bool = True):
+def ui(port: int | None = None, open_browser: bool = True):
     from mcp_email_server.ui import main as ui_main
 
     ui_main(port=port, open_browser=open_browser)

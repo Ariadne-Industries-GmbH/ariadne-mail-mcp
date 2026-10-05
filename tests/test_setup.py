@@ -341,6 +341,71 @@ def test_setup_ui_binds_to_loopback_only():
     assert launch["server_port"] == 8766
 
 
+def test_setup_ui_reports_gradio_start_failure_without_traceback():
+    from mcp_email_server.ui import main as ui_main
+
+    with patch("mcp_email_server.ui.migrate_legacy_config"), patch("mcp_email_server.ui.create_ui") as create_ui:
+        create_ui.return_value.launch.side_effect = OSError("Cannot find empty port in range: 8765-8765")
+        with pytest.raises(SystemExit, match="ariadne-mail-mcp ui --port 8766 --no-open-browser"):
+            ui_main(port=8765)
+
+
+def test_setup_ui_tries_next_port_on_default_start():
+    from mcp_email_server.ui import main as ui_main
+
+    with patch("mcp_email_server.ui.migrate_legacy_config"), patch("mcp_email_server.ui.create_ui") as create_ui:
+        launch = create_ui.return_value.launch
+        launch.side_effect = [OSError("Cannot find empty port in range: 8765-8765"), None]
+        ui_main(open_browser=False)
+    assert [call.kwargs["server_port"] for call in launch.call_args_list] == [8765, 8766]
+    assert all(call.kwargs["server_name"] == "127.0.0.1" for call in launch.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_mailbox_actions_show_dismissible_result_dialog():
+    from mcp_email_server.ui import create_ui
+
+    app = create_ui()
+    config = app.get_config_file()
+    dialog = next(
+        component for component in config["components"] if component["props"].get("elem_id") == "mailbox-result-dialog"
+    )
+    ok = next(component for component in config["components"] if component["props"].get("value") == "OK")
+    assert dialog["props"]["visible"] is False
+    assert any(
+        dependency["targets"] == [(ok["id"], "click")] and dependency["outputs"] == [dialog["id"]]
+        for dependency in config["dependencies"]
+    )
+    close = next(
+        app.fns[dependency["id"]].fn
+        for dependency in config["dependencies"]
+        if dependency["targets"] == [(ok["id"], "click")]
+    )
+    assert close()["visible"] is False
+
+    values = tuple(form()[field] for field in FIELDS)
+    test = next(fn.fn for fn in app.fns.values() if fn.fn.__name__ == "test")
+    with patch("mcp_email_server.ui.check_account", new_callable=AsyncMock) as check:
+        check.return_value = [("IMAP", True, "Connected"), ("SMTP", False, "Authentication failed")]
+        result = await test(None, *values)
+        check.return_value = [("IMAP", True, "Connected"), ("SMTP", True, "Connected")]
+        successful = await test(None, *values)
+    assert result[1] == "Connection failed"
+    assert "IMAP" in result[2] and "SMTP" in result[2]
+    assert result[3]["visible"] is True
+    assert successful[1] == "Connection successful"
+    assert successful[3]["visible"] is True
+
+    save = next(fn.fn for fn in app.fns.values() if fn.fn.__name__ == "save")
+    saved = save(None, *values)
+    assert saved[5:7] == ("Mailbox saved", "The mailbox was saved.")
+    assert saved[7]["visible"] is True
+    invalid = dict(form(email_address="invalid"))
+    failed = save(None, *(invalid[field] for field in FIELDS))
+    assert failed[5] == "Could not save mailbox"
+    assert failed[7]["visible"] is True
+
+
 def test_ariadne_handles_wrapped_lookup_and_redacts_errors():
     with patch("mcp_email_server.integrations.httpx.Client") as factory:
         client = factory.return_value.__enter__.return_value
