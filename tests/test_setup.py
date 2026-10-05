@@ -368,42 +368,42 @@ async def test_mailbox_actions_show_dismissible_result_dialog():
     app = create_ui()
     config = app.get_config_file()
     dialog = next(
-        component for component in config["components"] if component["props"].get("elem_id") == "mailbox-result-dialog"
+        component for component in config["components"] if component["props"].get("elem_id") == "mailbox-result"
     )
-    ok = next(component for component in config["components"] if component["props"].get("value") == "OK")
-    assert dialog["props"]["visible"] is False
+    assert dialog["type"] == "html"
+    assert dialog["props"]["value"] == ""
+    assert "MutationObserver" in dialog["props"]["js_on_load"]
     assert any(
-        dependency["targets"] == [(ok["id"], "click")] and dependency["outputs"] == [dialog["id"]]
+        dependency["targets"] == [(dialog["id"], "click")] and dependency["outputs"] == [dialog["id"]]
         for dependency in config["dependencies"]
     )
     close = next(
         app.fns[dependency["id"]].fn
         for dependency in config["dependencies"]
-        if dependency["targets"] == [(ok["id"], "click")]
+        if dependency["targets"] == [(dialog["id"], "click")]
     )
-    assert close()["visible"] is False
+    assert close() == ""
 
     values = tuple(form()[field] for field in FIELDS)
     test = next(fn.fn for fn in app.fns.values() if fn.fn.__name__ == "test")
     with patch("mcp_email_server.ui.check_account", new_callable=AsyncMock) as check:
-        check.return_value = [("IMAP", True, "Connected"), ("SMTP", False, "Authentication failed")]
+        check.return_value = [("IMAP", True, "Connected"), ("SMTP", False, "Authentication <failed>")]
         result = await test(None, *values)
         check.return_value = [("IMAP", True, "Connected"), ("SMTP", True, "Connected")]
         successful = await test(None, *values)
-    assert result[1] == "Connection failed"
-    assert "IMAP" in result[2] and "SMTP" in result[2]
-    assert result[3]["visible"] is True
-    assert successful[1] == "Connection successful"
-    assert successful[3]["visible"] is True
+    assert "Connection failed" in result[1]
+    assert "IMAP" in result[1] and "SMTP" in result[1]
+    assert "Authentication &lt;failed&gt;" in result[1]
+    assert "<dialog" in result[1] and "data-dialog-close" in result[1]
+    assert "Connection successful" in successful[1]
 
     save = next(fn.fn for fn in app.fns.values() if fn.fn.__name__ == "save")
     saved = save(None, *values)
-    assert saved[5:7] == ("Mailbox saved", "The mailbox was saved.")
-    assert saved[7]["visible"] is True
+    assert "Mailbox saved" in saved[5]
+    assert "The mailbox was saved." in saved[5]
     invalid = dict(form(email_address="invalid"))
     failed = save(None, *(invalid[field] for field in FIELDS))
-    assert failed[5] == "Could not save mailbox"
-    assert failed[7]["visible"] is True
+    assert "Could not save mailbox" in failed[5]
 
 
 def test_ariadne_handles_wrapped_lookup_and_redacts_errors():

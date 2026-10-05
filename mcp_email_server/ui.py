@@ -34,27 +34,36 @@ CSS = """
 #intro { padding: 22px 0 12px; }
 #intro h1 { letter-spacing: -.035em; font-size: 2.2rem; }
 .account-summary { padding: 16px; border: 1px solid var(--border-color-primary); border-radius: 12px; }
-#mailbox-result-dialog {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    background: rgba(0, 0, 0, .58);
-}
-#mailbox-result-card {
-    width: min(100%, 540px);
-    max-height: 80vh;
-    overflow-y: auto;
-    padding: 24px;
-    border-radius: 14px;
-    background: var(--background-fill-primary);
-    box-shadow: 0 16px 48px rgba(0, 0, 0, .28);
-}
 footer { display: none !important; }
 """
+
+RESULT_DIALOG_JS = """
+const openDialog = () => {
+    const dialog = element.querySelector('dialog');
+    if (dialog && !dialog.open) dialog.showModal();
+};
+new MutationObserver(openDialog).observe(element, {childList: true, subtree: true});
+element.addEventListener('click', (event) => {
+    if (event.target instanceof Element && event.target.closest('[data-dialog-close]')) {
+        element.querySelector('dialog')?.close();
+        trigger('click');
+    }
+});
+element.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    element.querySelector('dialog')?.close();
+    trigger('click');
+}, true);
+openDialog();
+"""
+
+
+def _error_text(error: Exception) -> str:
+    if isinstance(error, (SetupError, LoginError)):
+        return str(error)
+    if isinstance(error, OSError):
+        return "Settings could not be saved. Check the location and write permissions."
+    return "Check your input. Settings were not changed."
 
 
 def _parse_allowed_recipients_input(raw_text: str) -> list[str]:
@@ -62,11 +71,7 @@ def _parse_allowed_recipients_input(raw_text: str) -> list[str]:
 
 
 def _message(error: Exception) -> str:
-    if isinstance(error, (SetupError, LoginError)):
-        return html.escape(str(error))
-    if isinstance(error, OSError):
-        return "Settings could not be saved. Check the location and write permissions."
-    return "Check your input. Settings were not changed."
+    return html.escape(_error_text(error))
 
 
 def _connection_report(results: list[tuple[str, bool, str]]) -> str:
@@ -75,9 +80,38 @@ def _connection_report(results: list[tuple[str, bool, str]]) -> str:
     )
 
 
-def _connection_feedback(results: list[tuple[str, bool, str]]) -> tuple[str, str]:
-    title = "Connection successful" if results and all(success for _, success, _ in results) else "Connection failed"
-    return title, _connection_report(results)
+def _result_dialog_html(title: str, message: str, *, success: bool) -> str:
+    icon = "✓" if success else "!"
+    accent = "#0f766e" if success else "#b91c1c"
+    return f"""
+<style>.ariadne-result-dialog::backdrop {{ background: rgba(4, 12, 27, .68); }}</style>
+<dialog class="ariadne-result-dialog" aria-labelledby="mailbox-result-title"
+    aria-describedby="mailbox-result-message"
+    style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);margin:0;
+           width:min(520px,calc(100vw - 32px));max-height:80vh;padding:0;overflow:auto;
+           border:1px solid var(--border-color-primary);border-radius:16px;
+           background:var(--background-fill-primary);color:var(--body-text-color);
+           box-shadow:0 20px 60px rgba(0,0,0,.35)">
+  <div style="padding:28px;display:grid;gap:18px">
+    <div style="display:flex;align-items:center;gap:14px">
+      <span aria-hidden="true" style="display:grid;place-items:center;flex:none;width:38px;height:38px;
+          border-radius:50%;background:{accent};color:white;font-weight:700">{icon}</span>
+      <h2 id="mailbox-result-title" style="margin:0;font-size:1.3rem">{html.escape(title)}</h2>
+    </div>
+    <div id="mailbox-result-message" style="white-space:pre-wrap;line-height:1.5">{html.escape(message)}</div>
+    <button type="button" data-dialog-close
+        style="justify-self:end;min-width:96px;padding:10px 18px;border:0;border-radius:8px;
+               background:#0f766e;color:white;font:inherit;font-weight:600;cursor:pointer">OK</button>
+  </div>
+</dialog>
+"""
+
+
+def _connection_feedback(results: list[tuple[str, bool, str]]) -> str:
+    success = bool(results) and all(passed for _, passed, _ in results)
+    title = "Connection successful" if success else "Connection failed"
+    report = "\n".join(f"{'✓' if passed else '✗'} {protocol}: {message}" for protocol, passed, message in results)
+    return _result_dialog_html(title, report, success=success)
 
 
 def create_ui() -> gr.Blocks:  # noqa: C901
@@ -225,14 +259,8 @@ def create_ui() -> gr.Blocks:  # noqa: C901
                     "**Direct TOML editing:** See `docs/configuration.md` in the release archive for an example, every setting, and the sending permissions.\n\n"
                     "**Changes:** Running MCP processes load changed account settings on the next tool call. Restart the MCP in your AI client after changing its client configuration."
                 )
-        with (
-            gr.Group(visible=False, elem_id="mailbox-result-dialog") as result_dialog,
-            gr.Column(elem_id="mailbox-result-card"),
-        ):
-            result_title = gr.Markdown("", elem_id="mailbox-result-title")
-            result_message = gr.Markdown("")
-            result_ok = gr.Button("OK", variant="primary")
-        result_ok.click(lambda: gr.update(visible=False), outputs=result_dialog, api_name=False, queue=False)
+        result_dialog = gr.HTML(value="", elem_id="mailbox-result", js_on_load=RESULT_DIALOG_JS)
+        result_dialog.click(lambda: "", outputs=result_dialog, api_name=False, queue=False)
         fields = [
             account_name,
             full_name,
@@ -303,9 +331,7 @@ def create_ui() -> gr.Blocks:  # noqa: C901
                     "",
                     "",
                     "",
-                    "Mailbox saved",
-                    "The mailbox was saved.",
-                    gr.update(visible=True),
+                    _result_dialog_html("Mailbox saved", "The mailbox was saved.", success=True),
                 )
             except Exception as error:
                 return (
@@ -314,29 +340,25 @@ def create_ui() -> gr.Blocks:  # noqa: C901
                     gr.skip(),
                     gr.skip(),
                     gr.skip(),
-                    "Could not save mailbox",
-                    _message(error),
-                    gr.update(visible=True),
+                    _result_dialog_html("Could not save mailbox", _error_text(error), success=False),
                 )
 
         save_button.click(
             save,
             [original, *fields],
-            [status, original, password, imap_password, smtp_password, result_title, result_message, result_dialog],
+            [status, original, password, imap_password, smtp_password, result_dialog],
             api_name=False,
         ).then(refresh, outputs=refresh_outputs, api_name=False)
 
-        async def test(original_name: str | None, *raw: Any) -> tuple[str, str, str, Any]:
+        async def test(original_name: str | None, *raw: Any) -> tuple[str, str]:
             try:
                 account = build_account(dict(zip(FIELDS, raw, strict=True)), original_name)
-                title, message = _connection_feedback(await check_account(account))
+                result = _connection_feedback(await check_account(account))
             except Exception as error:
-                title, message = "Connection test failed", _message(error)
-            return "", title, message, gr.update(visible=True)
+                result = _result_dialog_html("Connection test failed", _error_text(error), success=False)
+            return "", result
 
-        test_button.click(
-            test, [original, *fields], [status, result_title, result_message, result_dialog], api_name=False
-        )
+        test_button.click(test, [original, *fields], [status, result_dialog], api_name=False)
 
         def load_app(value: str) -> tuple[str, Any, Any, Any]:
             if value not in {"google", "microsoft"}:
