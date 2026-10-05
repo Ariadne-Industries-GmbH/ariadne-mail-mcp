@@ -80,12 +80,23 @@ def main() -> None:
                     time.sleep(0.5)
                 raise TimeoutError("Binary UI did not become ready")
             finally:
-                process.terminate()
-                try:
+                if sys.platform == "win32":
+                    # A PyInstaller one-file executable starts a child process that keeps cwd open.
+                    taskkill = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "taskkill.exe"
+                    subprocess.run(  # noqa: S603
+                        [str(taskkill), "/PID", str(process.pid), "/T", "/F"],
+                        capture_output=True,
+                        check=True,
+                        timeout=10,
+                    )
                     process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+                else:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
 
 
 if __name__ == "__main__":

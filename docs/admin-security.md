@@ -4,24 +4,24 @@ This page describes the current local deployment so an administrator can decide 
 
 ## Trust boundary and network access
 
-| Component | Access and controls |
-| --- | --- |
-| MCP server | Started by the AI client as a child process using local `stdio`. The CLI does not expose SSE or HTTP transports. The AI client and its users can invoke the published tools. There is no separate MCP authentication layer. |
-| Setup UI | Binds to `127.0.0.1` only, with sharing disabled. It has no login. Any local process or user that can reach the loopback port may interact with it. Close the UI after setup. |
-| OAuth callback | Temporary HTTP listener on `127.0.0.1` with a random free port during sign-in. The flow checks OAuth state and uses PKCE. |
+| Component            | Access and controls                                                                                                                                                                                                               |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MCP server           | Started by the AI client as a child process using local `stdio`. The CLI does not expose SSE or HTTP transports. The AI client and its users can invoke the published tools. There is no separate MCP authentication layer.       |
+| Setup UI             | Binds to `127.0.0.1` only, with sharing disabled. It has no login. Any local process or user that can reach the loopback port may interact with it. Close the UI after setup.                                                     |
+| OAuth callback       | Temporary HTTP listener on `127.0.0.1` with a random free port during sign-in. The flow checks OAuth state and uses PKCE.                                                                                                         |
 | Outbound connections | IMAP/SMTP servers configured for each account, Google or Microsoft OAuth endpoints when applicable, and an optional Ariadne Engine registration endpoint if the user invokes that UI action. No inbound LAN listener is required. |
 
 Treat the workstation user account, the AI client, and its access to MCP tools as trusted. A compromised client can read mail through the available tools and may change mailbox state or configuration. The `add_email_account` tool can add an account, so administrators should review the complete published tool list before giving the client access. Do not register the server for untrusted client users.
 
 ## Data, credentials, and permissions
 
-| Data | Location / behavior |
-| --- | --- |
-| Classic IMAP/SMTP passwords | Plaintext in the local `config.toml`. New files use mode `0600` on Linux. Protect the containing folder and backups; on Windows, verify its ACL. |
-| OAuth app client data | `oauth-clients.json` beside `config.toml`. A Google desktop client secret may be present here. |
-| OAuth user tokens | System keyring only; no plaintext fallback. The keyring must be available to the same operating system user that runs the MCP process. |
-| Environment settings | `MCP_EMAIL_SERVER_*` account values override file values. Managed account passwords are not copied into TOML when the UI saves other settings. Protect the client or process configuration that holds them. |
-| Mail content | Returned to the AI client over local stdio. The client's storage, logs, model routing, and retention policies then apply. |
+| Data                        | Location / behavior                                                                                                                                                                                         |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Classic IMAP/SMTP passwords | Plaintext in the local `config.toml`. New files use mode `0600` on Linux. Protect the containing folder and backups; on Windows, verify its ACL.                                                            |
+| OAuth app client data       | `oauth-clients.json` beside `config.toml`. A Google desktop client secret may be present here.                                                                                                              |
+| OAuth user tokens           | System keyring only; no plaintext fallback. The keyring must be available to the same operating system user that runs the MCP process.                                                                      |
+| Environment settings        | `MCP_EMAIL_SERVER_*` account values override file values. Managed account passwords are not copied into TOML when the UI saves other settings. Protect the client or process configuration that holds them. |
+| Mail content                | Returned to the AI client over local stdio. The client's storage, logs, model routing, and retention policies then apply.                                                                                   |
 
 The native binary keeps `mcp_email_server/config.toml` in a folder beside the executable. An installed Python command uses the user profile config directory. `MCP_EMAIL_SERVER_CONFIG_PATH` sets an explicit path. `config-path` prints the active path. On first start, the binary may copy an old profile or working-directory config and OAuth app data into its local folder while leaving the source intact. New migrations record the source path. `reset` removes the active config, recognized legacy locations, the recorded source, and referenced keyring tokens, and prints locations from which files were removed. A migration marker prevents re-import. A former working directory from a migration made before source tracking cannot be located if reset is run elsewhere; check it manually. With an explicit config override, reset removes only that location. Backups, environment variables, client registrations, and provider consent must be handled separately.
 
