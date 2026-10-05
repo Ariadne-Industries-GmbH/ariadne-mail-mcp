@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import os
 import re
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -428,10 +429,18 @@ _settings = None
 _settings_signature = None
 
 
+def _config_signature(path: Path) -> tuple[Path, bytes | None]:
+    try:
+        # Consecutive writes can share a timestamp on Windows, even after an atomic replacement.
+        return path, sha256(path.read_bytes()).digest()
+    except FileNotFoundError:
+        return path, None
+
+
 def get_settings(reload: bool = False) -> Settings:
     global _settings, _settings_signature
     path = get_config_path()
-    signature = (path, path.stat().st_mtime_ns if path.exists() else None)
+    signature = _config_signature(path)
     if not _settings or reload or signature != _settings_signature:
         logger.info(f"Loading settings from {path}")
         _settings = Settings()

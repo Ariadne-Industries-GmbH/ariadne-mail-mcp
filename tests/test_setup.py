@@ -116,6 +116,24 @@ def test_config_follows_environment_path_and_reloads(tmp_path, monkeypatch):
     assert not get_settings().enable_attachment_download
 
 
+def test_config_reloads_when_timestamp_and_size_do_not_change(tmp_path, monkeypatch):
+    other = tmp_path / "other.toml"
+    monkeypatch.setenv("MCP_EMAIL_SERVER_CONFIG_PATH", str(other))
+    timestamp = 1_700_000_000_000_000_000
+    atomic_private_write(other, 'db_location = "alpha"\n')
+    os.utime(other, ns=(timestamp, timestamp))
+    first_stat = other.stat()
+    first = get_settings()
+    assert first.db_location == "alpha"
+
+    atomic_private_write(other, 'db_location = "bravo"\n')
+    os.utime(other, ns=(timestamp, timestamp))
+    assert other.stat().st_mtime_ns == first_stat.st_mtime_ns
+    assert other.stat().st_size == first_stat.st_size
+    assert get_settings() is not first
+    assert get_settings().db_location == "bravo"
+
+
 def test_frozen_binary_uses_directory_beside_executable(tmp_path, monkeypatch):
     monkeypatch.delenv("MCP_EMAIL_SERVER_CONFIG_PATH")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "profile"))
